@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://savana.in/sitemap.xml
+
+# Disallow admin routes
+Disallow: /admin/
+Disallow: /checkout
+Disallow: /account
+Disallow: /orders
+Disallow: /cart
+Disallow: /wishlist
