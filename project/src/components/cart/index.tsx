@@ -6,6 +6,8 @@ import { useCartStore, useUIStore, useToastStore } from '../../stores';
 import { formatPrice } from '../../lib/utils';
 import { cn } from '../../lib/utils';
 
+import { SafeProductImage } from '../product';
+
 export function CartDrawer() {
   const { isCartOpen, setCartOpen } = useUIStore();
   const { items, removeItem, updateQuantity, getSubtotal, getTax, getShipping, getTotal } = useCartStore();
@@ -70,10 +72,11 @@ export function CartDrawer() {
                   className="flex gap-4 p-3 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700 shadow-sm"
                 >
                   <div className="relative">
-                    <img
+                    <SafeProductImage
                       src={primaryImage}
                       alt={item.product.name}
                       className="w-20 h-24 object-cover rounded-lg"
+                      fallbackSize="sm"
                     />
                     {hasDiscount && (
                       <span className="absolute -top-1 -right-1 bg-accent-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">

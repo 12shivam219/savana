@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { formatPrice } from '../../lib/utils';
 import type { Order } from '../../types';
+import { SafeProductImage } from '../product';
 
 interface StatCard {
   label: string;
@@ -234,10 +235,11 @@ export default function AdminDashboard() {
                   <div className="flex-shrink-0 w-8 h-8 rounded-full bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center font-bold text-neutral-500 text-sm">
                     #{index + 1}
                   </div>
-                  <img
+                  <SafeProductImage
                     src={prod.image || '/placeholder.svg'}
                     alt={prod.name}
                     className="w-10 h-12 object-cover rounded bg-neutral-50"
+                    fallbackSize="sm"
                   />
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-sm text-neutral-900 dark:text-white truncate">{prod.name}</p>

@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase';
 import { formatPrice } from '../../lib/utils';
 import { cn } from '../../lib/utils';
 import type { Product, ProductImage, ProductVariant } from '../../types';
+import { SafeProductImage } from '../product';
 
 interface EditingProduct {
   id: string;
@@ -198,10 +199,11 @@ export default function AdminProducts() {
                     <tr key={product.id} className="hover:bg-neutral-50 dark:hover:bg-neutral-800">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <img
+                          <SafeProductImage
                             src={primaryImage?.url || '/placeholder.svg'}
                             alt={product.name}
                             className="w-12 h-12 object-cover rounded"
+                            fallbackSize="sm"
                           />
                           <div>
                             <p className="font-medium">{product.name}</p>
@@ -215,7 +217,7 @@ export default function AdminProducts() {
                       <td className="px-4 py-3">
                         <div>
                           {editingId === product.id && editFormData ? (
-                            <div className="space-y-2">
+                            <div key={`edit-price-${product.id}`} className="space-y-2">
                               <div>
                                 <label className="text-xs font-medium">Original Price (₹)</label>
                                 <input
@@ -237,7 +239,7 @@ export default function AdminProducts() {
                               </div>
                             </div>
                           ) : (
-                            <div>
+                            <div key={`view-price-${product.id}`}>
                               <p>{formatPrice(product.sale_price || product.base_price)}</p>
                               {product.sale_price && (
                                 <p className="text-sm text-neutral-500 line-through">
@@ -250,7 +252,7 @@ export default function AdminProducts() {
                       </td>
                       <td className="px-4 py-3">
                         {editingId === product.id && editFormData ? (
-                          <div>
+                          <div key={`edit-stock-${product.id}`}>
                             <label className="text-xs font-medium">Stock Qty</label>
                             <input
                               type="number"
@@ -260,7 +262,7 @@ export default function AdminProducts() {
                             />
                           </div>
                         ) : (
-                          <span className={cn(
+                          <span key={`view-stock-${product.id}`} className={cn(
                             totalStock <= 10 ? 'text-warning-600' : 'text-success-600'
                           )}>
                             {totalStock} units
@@ -283,8 +285,9 @@ export default function AdminProducts() {
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-2">
                           {editingId === product.id ? (
-                            <>
+                            <div key={`edit-actions-${product.id}`} className="flex items-center gap-2">
                               <button
+                                key={`save-btn-${product.id}`}
                                 onClick={() => saveProductChanges()}
                                 disabled={savingId === product.id}
                                 className="p-2 hover:bg-success-100 dark:hover:bg-success-900/30 rounded-lg text-success-600 disabled:opacity-50"
@@ -293,6 +296,7 @@ export default function AdminProducts() {
                                 <Save className="w-4 h-4" />
                               </button>
                               <button
+                                key={`cancel-btn-${product.id}`}
                                 onClick={() => {
                                   setEditingId(null);
                                   setEditFormData(null);
@@ -302,10 +306,11 @@ export default function AdminProducts() {
                               >
                                 <X className="w-4 h-4" />
                               </button>
-                            </>
+                            </div>
                           ) : (
-                            <>
+                            <div key={`view-actions-${product.id}`} className="flex items-center gap-2">
                               <Link
+                                key={`view-link-${product.id}`}
                                 to={`/product/${product.slug}`}
                                 className="p-2 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg"
                                 title="View product"
@@ -313,13 +318,14 @@ export default function AdminProducts() {
                                 <Eye className="w-4 h-4" />
                               </Link>
                               <button
+                                key={`edit-btn-${product.id}`}
                                 onClick={() => startEditingProduct(product.id, product.base_price, product.sale_price, totalStock)}
                                 className="p-2 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg"
                                 title="Edit product"
                               >
                                 <Edit className="w-4 h-4" />
                               </button>
-                            </>
+                            </div>
                           )}
                         </div>
                       </td>

@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { formatPrice, generateOrderNumber } from '../lib/utils';
 import { cn } from '../lib/utils';
 import type { Coupon } from '../types';
+import { SafeProductImage } from '../components/product';
 
 type PaymentMethod = 'upi' | 'card' | 'wallet' | 'netbanking' | 'cod';
 
@@ -21,11 +22,12 @@ const paymentMethods: { id: PaymentMethod; name: string; icon: React.ElementType
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, refreshProfile } = useAuth();
   const { items, getSubtotal, getTax, getShipping, clearCart } = useCartStore();
   const { addToast } = useToastStore();
   const [loading, setCheckoutLoading] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('upi');
+  const [useLoyaltyPoints, setUseLoyaltyPoints] = useState(false);
 
   // Coupon states
   const [couponCode, setCouponCode] = useState('');
@@ -33,23 +35,30 @@ export default function CheckoutPage() {
   const [couponError, setCouponError] = useState('');
   const [couponLoading, setCouponLoading] = useState(false);
 
-  const subtotal = getSubtotal();
-  const tax = getTax();
-  const shipping = getShipping();
+  const roundPrice = (val: number) => Math.round((val + Number.EPSILON) * 100) / 100;
 
-  let discount = 0;
+  const subtotal = roundPrice(getSubtotal());
+  const tax = roundPrice(getTax());
+  const shipping = roundPrice(getShipping());
+
+  let rawDiscount = 0;
   if (appliedCoupon) {
     if (appliedCoupon.type === 'percentage') {
-      discount = Math.round(subtotal * (Number(appliedCoupon.value) / 100));
+      rawDiscount = subtotal * (Number(appliedCoupon.value) / 100);
       if (appliedCoupon.max_discount_amount) {
-        discount = Math.min(discount, Number(appliedCoupon.max_discount_amount));
+        rawDiscount = Math.min(rawDiscount, Number(appliedCoupon.max_discount_amount));
       }
     } else if (appliedCoupon.type === 'fixed') {
-      discount = Math.min(Number(appliedCoupon.value), subtotal);
+      rawDiscount = Math.min(Number(appliedCoupon.value), subtotal);
     }
   }
+  const discount = roundPrice(rawDiscount);
 
-  const total = Math.max(0, subtotal + tax + shipping - discount);
+  const orderTotalBeforePoints = roundPrice(Math.max(0, subtotal + tax + shipping - discount));
+  const maxPointsDiscount = orderTotalBeforePoints;
+  const pointsDiscount = roundPrice(useLoyaltyPoints ? Math.min(maxPointsDiscount, (user?.loyalty_points || 0) * 0.1) : 0);
+  const redeemedPoints = useLoyaltyPoints ? Math.round(pointsDiscount * 10) : 0;
+  const total = roundPrice(Math.max(0, orderTotalBeforePoints - pointsDiscount));
 
   const handleApplyCoupon = async () => {
     if (!couponCode.trim()) return;
@@ -153,40 +162,15 @@ export default function CheckoutPage() {
         country: 'India',
       };
 
-      const { data: orderData, error: orderError } = await supabase
-        .from('orders')
-        .insert({
-          user_id: user.id,
-          order_number: orderNumber,
-          status: 'pending',
-          subtotal,
-          tax_amount: tax,
-          shipping_amount: shipping,
-          discount_amount: discount,
-          total,
-          billing_address: shippingAddress,
-          shipping_address: shippingAddress,
-          payment_method: paymentMethod,
-          payment_status: 'completed',
-        })
-        .select('id')
-        .single();
-
-      if (orderError) throw orderError;
-      if (!orderData) throw new Error('Failed to create order');
-
-      const orderId = orderData.id;
-
       const orderItems = items.map((item) => {
-        const price = item.product.sale_price || item.product.base_price;
+        const price = roundPrice(item.product.sale_price || item.product.base_price);
         const primaryImage = item.images?.[0]?.url || item.product.images?.[0]?.url || '/placeholder.svg';
         return {
-          order_id: orderId,
           product_id: item.product.id,
           variant_id: item.variantId,
           quantity: item.quantity,
           unit_price: price,
-          total_price: price * item.quantity,
+          total_price: roundPrice(price * item.quantity),
           product_name: item.product.name,
           product_image: primaryImage,
           size: item.variant.size,
@@ -194,34 +178,26 @@ export default function CheckoutPage() {
         };
       });
 
-      const { error: itemsError } = await supabase.from('order_items').insert(orderItems);
+      const { data: orderId, error: checkoutError } = await supabase.rpc('place_order', {
+        p_order_number: orderNumber,
+        p_subtotal: subtotal,
+        p_tax_amount: tax,
+        p_shipping_amount: shipping,
+        p_discount_amount: roundPrice(discount + pointsDiscount),
+        p_total: total,
+        p_billing_address: shippingAddress,
+        p_shipping_address: shippingAddress,
+        p_payment_method: paymentMethod,
+        p_payment_status: paymentMethod === 'cod' ? 'pending' : 'completed',
+        p_items: orderItems,
+        p_redeemed_points: redeemedPoints,
+      });
 
-      if (itemsError) throw itemsError;
+      if (checkoutError) throw checkoutError;
+      if (!orderId) throw new Error('Failed to place order');
 
-      // Decrement inventory stock count for each purchased product variant in the database
-      for (const item of items) {
-        const newQty = Math.max(0, item.variant.inventory_quantity - item.quantity);
-        const { error: variantError } = await supabase
-          .from('product_variants')
-          .update({
-            inventory_quantity: newQty,
-            is_in_stock: newQty > 0
-          })
-          .eq('id', item.variantId);
-
-        if (variantError) throw variantError;
-      }
-
-      const loyaltyPoints = Math.floor(total / 100);
-
-      if (loyaltyPoints > 0) {
-        await supabase.rpc('add_loyalty_points', {
-          p_user_id: user.id,
-          p_points: loyaltyPoints,
-          p_type: 'earned',
-          p_description: `Order #${orderNumber}`,
-        });
-      }
+      // Refresh loyalty points balance on profile state
+      await refreshProfile();
 
       addToast({
         type: 'success',
@@ -233,10 +209,15 @@ export default function CheckoutPage() {
       navigate('/orders');
     } catch (error) {
       console.error('Checkout error:', error);
+      const errMsg = error instanceof Error 
+        ? error.message 
+        : (error && typeof error === 'object' && 'message' in error 
+            ? String(error.message) 
+            : 'Please try again');
       addToast({
         type: 'error',
         title: 'Checkout failed',
-        message: 'Please try again',
+        message: errMsg,
       });
     } finally {
       setCheckoutLoading(false);
@@ -394,10 +375,11 @@ export default function CheckoutPage() {
                   const price = item.product.sale_price || item.product.base_price;
                   return (
                     <div key={item.variantId} className="flex gap-3">
-                      <img
+                      <SafeProductImage
                         src={primaryImage}
                         alt={item.product.name}
                         className="w-12 h-16 object-cover rounded"
+                        fallbackSize="sm"
                       />
                       <div className="flex-1 text-sm">
                         <p className="font-medium line-clamp-1">{item.product.name}</p>
@@ -460,6 +442,29 @@ export default function CheckoutPage() {
                 )}
               </div>
 
+              {/* Loyalty Points Selection */}
+              {user && (user.loyalty_points || 0) > 0 && (
+                <div className="my-4 pt-3 border-t border-neutral-200 dark:border-neutral-700">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      id="use-loyalty-checkbox"
+                      checked={useLoyaltyPoints}
+                      onChange={(e) => setUseLoyaltyPoints(e.target.checked)}
+                      className="rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                      Use Loyalty Points ({user.loyalty_points} points available)
+                    </span>
+                  </label>
+                  {useLoyaltyPoints && (
+                    <p className="text-xs text-success-600 dark:text-success-400 mt-1.5 font-medium">
+                      Saving {formatPrice(pointsDiscount)} discount ({redeemedPoints} points redeemed)
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="border-t border-neutral-200 dark:border-neutral-700 pt-3" />
 
               <div className="space-y-3 my-4">
@@ -471,6 +476,12 @@ export default function CheckoutPage() {
                   <div className="flex justify-between text-sm text-success-600 dark:text-success-400 font-medium">
                     <span>Discount</span>
                     <span>-{formatPrice(discount)}</span>
+                  </div>
+                )}
+                {pointsDiscount > 0 && (
+                  <div className="flex justify-between text-sm text-success-600 dark:text-success-400 font-medium">
+                    <span>Loyalty Points Redeemed</span>
+                    <span>-{formatPrice(pointsDiscount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-sm">

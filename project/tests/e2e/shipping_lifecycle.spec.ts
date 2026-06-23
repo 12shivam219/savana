@@ -167,7 +167,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     expect(fetchOrderError).toBeNull();
     expect(dbOrder).toBeTruthy();
     expect(dbOrder!.status).toBe('pending');
-    expect((dbOrder!.shipping_address as any).address_line1).toBe('456 Logistics Park Rd');
+    expect((dbOrder!.shipping_address as { address_line1: string }).address_line1).toBe('456 Logistics Park Rd');
 
     const orderNumber = dbOrder!.order_number;
 
@@ -213,6 +213,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     if (await signOutBtn.isVisible()) {
       await signOutBtn.click();
       await page.waitForURL('**/login');
+      await page.waitForTimeout(1000);
     }
 
     // Log in as Admin
@@ -265,7 +266,8 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     expect(dbOrderShipped!.status).toBe('shipped');
     expect(dbOrderShipped!.tracking_number).toBe('1Z999AA10123456784');
     
-    const trackingMetadata = JSON.parse(dbOrderShipped!.notes || '[]');
+    const parsedNotes = JSON.parse(dbOrderShipped!.notes || '{}');
+    const trackingMetadata = Array.isArray(parsedNotes) ? parsedNotes : (parsedNotes.events || []);
     expect(trackingMetadata).toContainEqual(expect.objectContaining({
       status: 'shipped',
       carrier: 'DHL',
@@ -282,6 +284,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     if (await signOutBtn.isVisible()) {
       await signOutBtn.click();
       await page.waitForURL('**/login');
+      await page.waitForTimeout(1000);
     }
 
     // Log back in as customer
@@ -306,14 +309,24 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     await expect(trackingLink).toHaveAttribute('href', /1Z999AA10123456784/);
 
     console.log('--- Phase 3: Simulate Webhook Delivery update ---');
-    // Simulate carrier webhook by directly updating database status to 'delivered'
-    const updatedNotes = [
-      ...trackingMetadata,
-      {
-        status: 'delivered',
-        timestamp: new Date().toISOString()
-      }
-    ];
+    // Simulate real-time tracking webhook or cron delivery update
+    let currentEvents = [];
+    let deliveryParsedNotes = {};
+    try {
+      deliveryParsedNotes = JSON.parse(dbOrderShipped!.notes || '{}');
+      currentEvents = Array.isArray(deliveryParsedNotes) ? deliveryParsedNotes : ((deliveryParsedNotes as any).events || []);
+    } catch { /* ignore */ }
+
+    const updatedNotes = {
+      ...(Array.isArray(deliveryParsedNotes) ? {} : deliveryParsedNotes),
+      events: [
+        ...currentEvents,
+        {
+          status: 'delivered',
+          timestamp: new Date().toISOString()
+        }
+      ]
+    };
 
     const { error: deliveryUpdateErr } = await supabase
       .from('orders')
@@ -385,6 +398,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     if (await signOutBtn.isVisible()) {
       await signOutBtn.click();
       await page.waitForURL('**/login');
+      await page.waitForTimeout(1000);
     }
 
     // Log back in as Admin

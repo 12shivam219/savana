@@ -188,8 +188,8 @@ CREATE TABLE public.orders (
 CREATE TABLE public.order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   order_id UUID NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
-  product_id UUID NOT NULL REFERENCES public.products(id),
-  variant_id UUID NOT NULL REFERENCES public.product_variants(id),
+  product_id UUID NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
+  variant_id UUID NOT NULL REFERENCES public.product_variants(id) ON DELETE CASCADE,
   quantity INTEGER NOT NULL CHECK (quantity > 0),
   unit_price DECIMAL(10,2) NOT NULL,
   total_price DECIMAL(10,2) NOT NULL,
@@ -257,7 +257,7 @@ CREATE TABLE public.loyalty_transactions (
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('earned', 'redeemed', 'expired')),
   points INTEGER NOT NULL,
-  order_id UUID REFERENCES public.orders(id),
+  order_id UUID REFERENCES public.orders(id) ON DELETE CASCADE,
   description TEXT NOT NULL,
   balance_after INTEGER NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()

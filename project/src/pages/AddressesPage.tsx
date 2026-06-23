@@ -22,6 +22,21 @@ interface Address {
   landmark: string | null;
 }
 
+const getErrorMessage = (error: any): string => {
+  if (!error) return 'An unknown error occurred';
+  if (error.message) {
+    if (error.details) {
+      return `${error.message} (${error.details})`;
+    }
+    return error.message;
+  }
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object') {
+    return error.details || error.hint || JSON.stringify(error);
+  }
+  return String(error);
+};
+
 export default function AddressesPage() {
   const { user } = useAuth();
   const { addToast } = useToastStore();
@@ -60,6 +75,7 @@ export default function AddressesPage() {
       addToast({
         type: 'error',
         title: 'Failed to load addresses',
+        message: getErrorMessage(error),
       });
     } finally {
       setLoading(false);
@@ -189,7 +205,7 @@ export default function AddressesPage() {
       addToast({
         type: 'error',
         title: 'Failed to save address',
-        message: 'Please try again',
+        message: getErrorMessage(error),
       });
     } finally {
       setLoading(false);
@@ -217,6 +233,7 @@ export default function AddressesPage() {
       addToast({
         type: 'error',
         title: 'Failed to delete address',
+        message: getErrorMessage(error),
       });
     } finally {
       setLoading(false);
@@ -255,6 +272,7 @@ export default function AddressesPage() {
       addToast({
         type: 'error',
         title: 'Failed to set default address',
+        message: getErrorMessage(error),
       });
     } finally {
       setLoading(false);

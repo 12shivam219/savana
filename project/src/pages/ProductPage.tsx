@@ -334,7 +334,7 @@ export default function ProductPage() {
             <QuantitySelector
               value={quantity}
               onChange={setQuantity}
-              max={selectedVariant?.inventory_quantity || 10}
+              max={selectedVariant?.inventory_quantity ?? 10}
               disabled={!selectedVariant}
             />
           </div>

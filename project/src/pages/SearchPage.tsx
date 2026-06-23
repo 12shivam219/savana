@@ -6,10 +6,18 @@ import { ProductGrid } from '../components/product';
 import { supabase } from '../lib/supabase';
 import type { Product, ProductImage, ProductVariant } from '../types';
 
+const safeDecodeURIComponent = (str: string) => {
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return str;
+  }
+};
+
 export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get('q') || '';
-  const [inputQuery, setInputQuery] = useState(query);
+  const [inputQuery, setInputQuery] = useState('');
   const [products, setProducts] = useState<Array<{
     product: Product;
     images: ProductImage[];
@@ -17,25 +25,30 @@ export default function SearchPage() {
   }>>([]);
 
   useEffect(() => {
-    if (query) {
-      searchProducts(query);
+    const decoded = safeDecodeURIComponent(query);
+    setInputQuery(decoded);
+    if (decoded) {
+      searchProducts(decoded);
+    } else {
+      setProducts([]);
     }
   }, [query]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (inputQuery.trim()) {
-      setSearchParams({ q: inputQuery.trim() });
+      setSearchParams({ q: encodeURIComponent(inputQuery.trim()) });
     }
   };
 
   async function searchProducts(searchQuery: string) {
     try {
+      const decodedQuery = safeDecodeURIComponent(searchQuery);
       const { data: productsData } = await supabase
         .from('products')
         .select('*')
         .eq('is_active', true)
-        .ilike('name', `%${searchQuery}%`)
+        .ilike('name', `%${decodedQuery}%`)
         .limit(20);
 
       if (productsData && productsData.length > 0) {
@@ -91,8 +104,8 @@ export default function SearchPage() {
         <>
           <h1 className="text-2xl font-display font-bold mb-2">
             {products.length > 0
-              ? `Found ${products.length} results for "${query}"`
-              : `No results for "${query}"`}
+              ? `Found ${products.length} results for "${safeDecodeURIComponent(query)}"`
+              : `No results for "${safeDecodeURIComponent(query)}"`}
           </h1>
 
           <div className="mt-8">

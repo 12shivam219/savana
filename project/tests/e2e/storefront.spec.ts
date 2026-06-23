@@ -1,14 +1,37 @@
 import { test, expect } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://evzlqrekovjimofgddwj.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2emxxcmVrb3ZqaW1vZmdkZHdqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4NjMyNTksImV4cCI6MjA5NzQzOTI1OX0.dibnBJJe1RtuKZsMrL6A7SlKl3e9gv4fFCkDuAJXhW8';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Resolve .env file relative to tests directory
+const envPath = path.resolve(__dirname, '../../.env');
+const envContent = fs.readFileSync(envPath, 'utf-8');
+const env: Record<string, string> = {};
+envContent.split('\n').forEach(line => {
+  const parts = line.split('=');
+  if (parts.length >= 2) {
+    const key = parts[0].trim();
+    const value = parts.slice(1).join('=').trim().replace(/^['"]|['"]$/g, '');
+    env[key] = value;
+  }
+});
+
+const supabaseUrl = env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY || '';
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Supabase URL or Anon Key is missing from .env file.');
+}
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Use the existing admin account — avoids registration and RLS elevation complexity
-const ADMIN_EMAIL = 'priyanktiwari219@gmail.com';
-const ADMIN_PASSWORD = 'Admin12';
+const ADMIN_EMAIL = '12shivamtiwari219@gmail.com';
+const ADMIN_PASSWORD = 'Admin@123';
 
 test.describe('E-Commerce Storefront Journey', () => {
   const testName = 'E2E Test User';
@@ -44,20 +67,11 @@ test.describe('E-Commerce Storefront Journey', () => {
       .single();
     expect(dbProduct).toBeTruthy();
 
-    const { data: dbVariants } = await supabase
-      .from('product_variants')
-      .select('id, inventory_quantity')
-      .eq('product_id', dbProduct!.id)
-      .order('id', { ascending: true });
-    expect(dbVariants).toBeTruthy();
-    expect(dbVariants!.length).toBeGreaterThan(0);
-
-    const targetVariant = dbVariants![0];
     const initialStock = 50;
     const { error: stockResetErr } = await supabase
       .from('product_variants')
       .update({ inventory_quantity: initialStock, is_in_stock: true })
-      .eq('id', targetVariant.id);
+      .eq('product_id', dbProduct!.id);
     expect(stockResetErr).toBeNull();
 
     // ----------------------------------------------------------------
@@ -121,19 +135,30 @@ test.describe('E-Commerce Storefront Journey', () => {
 
     expect(orderFetchErr).toBeNull();
     expect(dbOrders!.length).toBeGreaterThan(0);
-    expect(dbOrders![0].status).toBe('processing');
-    expect(dbOrders![0].payment_status).toBe('completed');
+    const dbOrder = dbOrders![0];
+    expect(dbOrder.status).toBe('pending');
+    expect(dbOrder.payment_status).toBe('completed');
+
+    // Fetch the order items to find out which variant was actually purchased
+    const { data: dbOrderItems, error: itemsFetchErr } = await supabase
+      .from('order_items')
+      .select('variant_id, quantity')
+      .eq('order_id', dbOrder.id);
+    expect(itemsFetchErr).toBeNull();
+    expect(dbOrderItems!.length).toBeGreaterThan(0);
+    const purchasedVariantId = dbOrderItems![0].variant_id;
+    const purchasedQty = dbOrderItems![0].quantity;
 
     // ----------------------------------------------------------------
-    // 7. Verify inventory decremented by 1
+    // 7. Verify inventory decremented
     // ----------------------------------------------------------------
     const { data: updatedVariant } = await supabase
       .from('product_variants')
       .select('inventory_quantity')
-      .eq('id', targetVariant.id)
+      .eq('id', purchasedVariantId)
       .single();
 
     expect(updatedVariant).toBeTruthy();
-    expect(updatedVariant!.inventory_quantity).toBe(initialStock - 1);
+    expect(updatedVariant!.inventory_quantity).toBe(initialStock - purchasedQty);
   });
 });

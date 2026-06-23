@@ -5,6 +5,36 @@ import { formatPrice, formatDate } from '../../lib/utils';
 import { cn } from '../../lib/utils';
 import type { Order, Address } from '../../types';
 
+interface OrderNotes {
+  events: any[];
+  carrier?: string;
+  tracking_number?: string;
+  return_reason?: string;
+  return_status?: string;
+}
+
+const parseOrderNotes = (notes: string | null | undefined): OrderNotes => {
+  if (!notes) return { events: [] };
+  try {
+    const parsed = JSON.parse(notes);
+    if (Array.isArray(parsed)) {
+      return { events: parsed };
+    }
+    if (parsed && typeof parsed === 'object') {
+      return {
+        events: Array.isArray(parsed.events) ? parsed.events : [],
+        carrier: parsed.carrier,
+        tracking_number: parsed.tracking_number,
+        return_reason: parsed.return_reason,
+        return_status: parsed.return_status
+      };
+    }
+  } catch (e) {
+    console.error('Error parsing order notes:', e);
+  }
+  return { events: [] };
+};
+
 const statusFilters = ['all', 'pending', 'processing', 'shipped', 'delivered', 'cancelled'] as const;
 
 export default function AdminOrders() {
@@ -63,21 +93,16 @@ export default function AdminOrders() {
 
   async function markAsDelivered(order: Order) {
     try {
-      let currentNotes = [];
-      try {
-        currentNotes = JSON.parse(order.notes || '[]');
-        if (!Array.isArray(currentNotes)) {
-          currentNotes = [];
-        }
-      } catch {}
+      const parsedNotes = parseOrderNotes(order.notes);
+      const deliveryEvent = {
+        status: 'delivered',
+        timestamp: new Date().toISOString()
+      };
 
-      const updatedNotes = [
-        ...currentNotes,
-        {
-          status: 'delivered',
-          timestamp: new Date().toISOString()
-        }
-      ];
+      const updatedNotes = {
+        ...parsedNotes,
+        events: [...parsedNotes.events, deliveryEvent]
+      };
 
       const { error } = await supabase
         .from('orders')
@@ -99,14 +124,22 @@ export default function AdminOrders() {
     e.preventDefault();
     if (!shippingOrderId || !trackingNumber) return;
     try {
-      const trackingMetadata = [
-        {
-          status: 'shipped',
-          carrier,
-          tracking_number: trackingNumber,
-          timestamp: new Date().toISOString(),
-        }
-      ];
+      const order = orders.find(o => o.id === shippingOrderId);
+      const parsedNotes = parseOrderNotes(order?.notes);
+
+      const trackingEvent = {
+        status: 'shipped',
+        carrier,
+        tracking_number: trackingNumber,
+        timestamp: new Date().toISOString(),
+      };
+
+      const updatedNotes = {
+        ...parsedNotes,
+        carrier,
+        tracking_number: trackingNumber,
+        events: [...parsedNotes.events, trackingEvent]
+      };
 
       const { error } = await supabase
         .from('orders')
@@ -114,7 +147,7 @@ export default function AdminOrders() {
           status: 'shipped',
           tracking_number: trackingNumber,
           tracking_url: `https://www.google.com/search?q=${trackingNumber}`,
-          notes: JSON.stringify(trackingMetadata)
+          notes: JSON.stringify(updatedNotes)
         })
         .eq('id', shippingOrderId);
 
@@ -157,20 +190,24 @@ export default function AdminOrders() {
       }
 
       // 3. Update order notes and status to represent "Returned & Restocked"
-      let currentNotes = {};
-      try {
-        currentNotes = JSON.parse(order.notes || '{}');
-      } catch {}
+      const parsedNotes = parseOrderNotes(order.notes);
+      const returnEvent = {
+        status: 'returned_restocked',
+        timestamp: new Date().toISOString()
+      };
+
+      const updatedNotes = {
+        ...parsedNotes,
+        return_status: 'returned_restocked',
+        events: [...parsedNotes.events, returnEvent]
+      };
 
       const { error } = await supabase
         .from('orders')
         .update({
           status: 'returned',
           payment_status: 'refunded',
-          notes: JSON.stringify({
-            ...currentNotes,
-            return_status: 'returned_restocked'
-          })
+          notes: JSON.stringify(updatedNotes)
         })
         .eq('id', order.id);
 
@@ -189,12 +226,10 @@ export default function AdminOrders() {
       return 'Unshipped';
     }
     if (order.status === 'returned') {
-      try {
-        const meta = JSON.parse(order.notes || '{}');
-        if (meta.return_status === 'returned_restocked') {
-          return 'Returned & Restocked';
-        }
-      } catch {}
+      const meta = parseOrderNotes(order.notes);
+      if (meta.return_status === 'returned_restocked') {
+        return 'Returned & Restocked';
+      }
       return 'Return Requested';
     }
     return order.status.charAt(0).toUpperCase() + order.status.slice(1);
@@ -211,12 +246,10 @@ export default function AdminOrders() {
       return 'bg-success-100 text-success-700';
     }
     if (status === 'returned') {
-      try {
-        const meta = JSON.parse(notes || '{}');
-        if (meta.return_status === 'returned_restocked') {
-          return 'bg-neutral-100 text-neutral-700';
-        }
-      } catch {}
+      const meta = parseOrderNotes(notes);
+      if (meta.return_status === 'returned_restocked') {
+        return 'bg-neutral-100 text-neutral-700';
+      }
       return 'bg-warning-100 text-warning-700';
     }
     return 'bg-neutral-100 text-neutral-700';
@@ -344,24 +377,22 @@ export default function AdminOrders() {
                               <CheckCircle className="w-4 h-4" />
                             </button>
                           )}
-                          {order.status === 'returned' && (() => {
-                            try {
-                              const meta = JSON.parse(order.notes || '{}');
-                              if (meta.return_status === 'requested') {
-                                return (
-                                  <button
-                                    onClick={() => handleApproveReturn(order)}
-                                    className="px-3 py-1 bg-success-600 hover:bg-success-700 text-white text-xs font-semibold rounded-lg"
-                                    title="Approve Return & Restock"
-                                    id={`approve-return-${order.order_number}`}
-                                  >
-                                    Approve Return
-                                  </button>
-                                );
-                              }
-                            } catch {}
-                            return null;
-                          })()}
+                           {order.status === 'returned' && (() => {
+                             const meta = parseOrderNotes(order.notes);
+                             if (meta.return_status === 'requested') {
+                               return (
+                                 <button
+                                   onClick={() => handleApproveReturn(order)}
+                                   className="px-3 py-1 bg-success-600 hover:bg-success-700 text-white text-xs font-semibold rounded-lg"
+                                   title="Approve Return & Restock"
+                                   id={`approve-return-${order.order_number}`}
+                                 >
+                                   Approve Return
+                                 </button>
+                               );
+                             }
+                             return null;
+                           })()}
                           {order.status !== 'cancelled' && order.status !== 'delivered' && order.status !== 'returned' && (
                             <button
                               onClick={() => updateOrderStatus(order.id, 'cancelled')}

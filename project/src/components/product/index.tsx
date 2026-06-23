@@ -6,6 +6,47 @@ import { Card, Badge, Button, PriceTag, Skeleton } from '../ui';
 import { useWishlistStore, useCartStore, useToastStore } from '../../stores';
 import type { Product, ProductVariant, ProductImage } from '../../types';
 
+interface SafeProductImageProps {
+  src: string;
+  alt: string;
+  className?: string;
+  fallbackSize?: 'sm' | 'md' | 'lg';
+}
+
+export function SafeProductImage({ src, alt, className, fallbackSize = 'md' }: SafeProductImageProps) {
+  const [imageError, setImageError] = useState(false);
+
+  const sizeClasses = {
+    sm: 'w-6 h-6',
+    md: 'w-10 h-10',
+    lg: 'w-16 h-16',
+  };
+
+  const containerClasses = {
+    sm: 'p-1',
+    md: 'p-2',
+    lg: 'p-4',
+  };
+
+  if (imageError || !src || src === '/placeholder.svg') {
+    return (
+      <div className={cn('w-full h-full flex flex-col items-center justify-center bg-neutral-100 dark:bg-neutral-800 text-neutral-400 select-none', containerClasses[fallbackSize], className)}>
+        <ImageIcon className={cn('text-neutral-400 dark:text-neutral-500 mb-1', sizeClasses[fallbackSize])} />
+        {fallbackSize !== 'sm' && <span className="text-[10px] text-neutral-500 mt-1">Image unavailable</span>}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onError={() => setImageError(true)}
+    />
+  );
+}
+
 interface ProductCardProps {
   product: Product;
   images: ProductImage[];
@@ -17,7 +58,6 @@ export function ProductCard({ product, images, variants, className }: ProductCar
   const { toggleWishlist, isInWishlist } = useWishlistStore();
   const { addItem } = useCartStore();
   const { addToast } = useToastStore();
-  const [imageError, setImageError] = useState(false);
 
   const primaryImage = images.find((img) => img.is_primary) || images[0];
   const isWishlisted = isInWishlist(product.id);
@@ -71,19 +111,12 @@ export function ProductCard({ product, images, variants, className }: ProductCar
     >
       <Card hover className="overflow-hidden">
         <div className="relative aspect-product bg-neutral-100 dark:bg-neutral-800">
-          {imageError ? (
-            <div className="w-full h-full flex flex-col items-center justify-center text-neutral-400">
-              <ImageIcon className="w-12 h-12 mb-2" />
-              <span className="text-xs">Image unavailable</span>
-            </div>
-          ) : (
-            <img
-              src={imageSrc}
-              alt={primaryImage?.alt || product.name}
-              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-              onError={() => setImageError(true)}
-            />
-          )}
+          <SafeProductImage
+            src={imageSrc}
+            alt={primaryImage?.alt || product.name}
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+            fallbackSize="md"
+          />
 
           <div className="absolute top-3 left-3 flex flex-col gap-2">
             {hasDiscount && (
@@ -266,7 +299,6 @@ export function CollectionCard({
   season,
   imageUrl,
 }: CollectionCardProps) {
-  const [imageError, setImageError] = useState(false);
   const seasonColors: Record<string, string> = {
     summer: 'bg-amber-500',
     monsoon: 'bg-blue-500',
@@ -278,18 +310,12 @@ export function CollectionCard({
   return (
     <Link to={`/collection/${slug}`} className="group block relative overflow-hidden rounded-2xl">
       <div className="aspect-[4/5] relative">
-        {imageError ? (
-          <div className="w-full h-full bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center">
-            <ImageIcon className="w-16 h-16 text-neutral-400" />
-          </div>
-        ) : (
-          <img
-            src={imageUrl || '/placeholder.svg'}
-            alt={name}
-            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-            onError={() => setImageError(true)}
-          />
-        )}
+        <SafeProductImage
+          src={imageUrl || '/placeholder.svg'}
+          alt={name}
+          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+          fallbackSize="lg"
+        />
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
         <div className="absolute bottom-0 left-0 right-0 p-6 text-white">
           {season && (

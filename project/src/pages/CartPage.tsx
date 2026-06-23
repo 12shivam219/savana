@@ -6,6 +6,8 @@ import { useCartStore } from '../stores';
 import { formatPrice } from '../lib/utils';
 import { cn } from '../lib/utils';
 
+import { SafeProductImage } from '../components/product';
+
 export default function CartPage() {
   const {
     items,
@@ -59,10 +61,11 @@ export default function CartPage() {
             return (
               <Card key={item.variantId} className="p-4">
                 <div className="flex gap-4">
-                  <img
+                  <SafeProductImage
                     src={primaryImage}
                     alt={item.product.name}
                     className="w-24 h-32 object-cover rounded-lg"
+                    fallbackSize="md"
                   />
                   <div className="flex-1">
                     <div className="flex justify-between">
@@ -92,7 +95,7 @@ export default function CartPage() {
                       <QuantitySelector
                         value={item.quantity}
                         onChange={(qty) => updateQuantity(item.variantId, qty)}
-                        max={item.variant.inventory_quantity || 10}
+                        max={item.variant.inventory_quantity ?? 10}
                       />
                       <PriceTag price={itemTotal} size="lg" />
                     </div>

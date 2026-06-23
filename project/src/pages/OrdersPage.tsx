@@ -6,9 +6,12 @@ import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
 import { formatDate, formatPrice } from '../lib/utils';
 import { useToastStore } from '../stores';
+import { SafeProductImage } from '../components/product';
 
 interface OrderItem {
   id: string;
+  product_id: string;
+  variant_id: string;
   product_name: string;
   product_image: string;
   size: string;
@@ -57,7 +60,7 @@ function getStatusTextAndColor(status: string, notes?: string | null) {
       if (meta.return_status === 'returned_restocked') {
         return { text: 'Returned & Restocked', colorClass: 'bg-neutral-100 text-neutral-700' };
       }
-    } catch {}
+    } catch { /* ignore */ }
     return { text: 'Return Requested', colorClass: 'bg-neutral-100 text-neutral-700' };
   }
   const labels: Record<string, string> = {
@@ -148,16 +151,40 @@ export default function OrdersPage() {
     try {
       setProcessingOrderId(orderId);
 
+      const order = orders.find(o => o.id === orderId);
+      let currentNotes: any = {};
+      try {
+        if (order?.notes) {
+          const parsed = JSON.parse(order.notes || '{}');
+          if (Array.isArray(parsed)) {
+            currentNotes = { events: parsed };
+          } else if (parsed && typeof parsed === 'object') {
+            currentNotes = parsed;
+          }
+        }
+      } catch { /* ignore */ }
+
+      const events = Array.isArray(currentNotes.events) ? currentNotes.events : [];
+      const returnRequestedEvent = {
+        status: 'return_requested',
+        reason,
+        timestamp: new Date().toISOString()
+      };
+
+      const updatedNotes = {
+        ...currentNotes,
+        return_reason: reason,
+        return_status: 'requested',
+        events: [...events, returnRequestedEvent]
+      };
+
       // Update order status to 'returned' and store metadata in notes
       const { error: orderError } = await supabase
         .from('orders')
         .update({
           status: 'returned',
           payment_status: 'refunded',
-          notes: JSON.stringify({
-            return_reason: reason,
-            return_status: 'requested'
-          })
+          notes: JSON.stringify(updatedNotes)
         })
         .eq('id', orderId);
       if (orderError) throw orderError;
@@ -354,9 +381,17 @@ export default function OrdersPage() {
                   <span className="font-semibold text-neutral-800 dark:text-neutral-200 capitalize" id={`carrier-name-${order.order_number}`}>
                     {(() => {
                       try {
-                        const trackingMetadata = JSON.parse(order.notes || '[]');
-                        const shipStep = trackingMetadata.find((t: any) => t.status === 'shipped');
-                        return shipStep?.carrier || 'Carrier';
+                        const parsed = JSON.parse(order.notes || '{}');
+                        if (Array.isArray(parsed)) {
+                          const shipStep = parsed.find((t: any) => t.status === 'shipped');
+                          return shipStep?.carrier || 'Carrier';
+                        } else if (parsed && typeof parsed === 'object') {
+                          if (parsed.carrier) return parsed.carrier;
+                          const events = Array.isArray(parsed.events) ? parsed.events : [];
+                          const shipStep = events.find((t: any) => t.status === 'shipped');
+                          return shipStep?.carrier || 'Carrier';
+                        }
+                        return 'Carrier';
                       } catch {
                         return 'Carrier';
                       }
@@ -435,10 +470,11 @@ export default function OrdersPage() {
                     <div className="space-y-3">
                       {itemsByOrder[order.id]?.map((item) => (
                         <div key={item.id} className="flex items-center gap-3 text-sm">
-                          <img
+                          <SafeProductImage
                             src={item.product_image || '/placeholder.svg'}
                             alt={item.product_name}
                             className="w-12 h-16 object-cover rounded bg-neutral-100 dark:bg-neutral-800"
+                            fallbackSize="sm"
                           />
                           <div className="flex-1 min-w-0">
                             <p className="font-medium text-neutral-900 dark:text-white truncate">{item.product_name}</p>

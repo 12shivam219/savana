@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { User } from '../types';
+import { useCartStore } from '../stores';
 
 interface AuthContextType {
   user: User | null;
@@ -11,6 +12,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
   updateProfile: (updates: Partial<User>) => Promise<{ error: Error | null }>;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -21,39 +23,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
-
-    const getSession = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (mounted && session?.user) {
-        await fetchProfile(session.user.id);
-      } else {
-        setIsLoading(false);
-      }
-    };
-
-    getSession();
+    let authTimeout: ReturnType<typeof setTimeout> | undefined;
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        // Offload fetchProfile to a setTimeout to prevent blocking/deadlock in the Supabase client
-        setTimeout(() => {
-          if (mounted) {
-            fetchProfile(session.user.id);
+      if (session?.user) {
+        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+          // Offload fetchProfile to a setTimeout to prevent blocking/deadlock in the Supabase client
+          if (authTimeout) {
+            clearTimeout(authTimeout);
           }
-        }, 0);
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setIsLoading(false);
+          authTimeout = setTimeout(() => {
+            if (mounted) {
+              fetchProfile(session.user.id);
+              useCartStore.getState().mergeCart(session.user.id);
+            }
+          }, 0);
+        } else {
+          if (mounted) {
+            setIsLoading(false);
+          }
+        }
+      } else {
+        if (mounted) {
+          setUser(null);
+          setIsLoading(false);
+        }
       }
     });
 
     return () => {
       mounted = false;
+      if (authTimeout) {
+        clearTimeout(authTimeout);
+      }
       subscription.unsubscribe();
     };
   }, []);
@@ -71,6 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error fetching profile:', error);
       setUser(null);
+      setIsLoading(false);
     } finally {
       setIsLoading(false);
     }
@@ -129,17 +134,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user) return { error: new Error('Not authenticated') };
 
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .update(updates)
-        .eq('id', user.id);
+        .eq('id', user.id)
+        .select()
+        .single();
 
       if (error) throw error;
 
-      setUser({ ...user, ...updates });
+      setUser(data as User);
       return { error: null };
     } catch (error) {
       return { error: error as Error };
+    }
+  }
+
+  async function refreshProfile() {
+    if (user) {
+      await fetchProfile(user.id);
     }
   }
 
@@ -154,6 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut,
         resetPassword,
         updateProfile,
+        refreshProfile,
       }}
     >
       {children}

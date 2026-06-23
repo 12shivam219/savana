@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { Product, ProductVariant, ToastMessage, ThemeMode } from '../types';
+import type { Product, ProductVariant, ToastMessage, ThemeMode, ProductImage } from '../types';
+import { supabase } from '../lib/supabase';
 
 interface CartItem {
   productId: string;
@@ -25,7 +26,52 @@ interface CartStore {
   getShipping: (freeThreshold?: number, baseRate?: number) => number;
   getTotal: () => number;
   getItem: (variantId: string) => CartItem | undefined;
+  mergeCart: (userId: string) => Promise<void>;
 }
+
+let syncPromise = Promise.resolve();
+
+const syncCartToDb = (items: CartItem[]) => {
+  syncPromise = syncPromise.then(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user) return;
+
+      let { data: cart } = await supabase
+        .from('carts')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (!cart) {
+        const { data: newCart } = await supabase
+          .from('carts')
+          .insert({ user_id: user.id, session_id: `session_${Date.now()}` })
+          .select('id')
+          .single();
+        if (!newCart) return;
+        cart = newCart;
+      }
+
+      // Delete existing items
+      await supabase.from('cart_items').delete().eq('cart_id', cart.id);
+
+      // Insert current items
+      if (items.length > 0) {
+        const itemsToInsert = items.map(item => ({
+          cart_id: cart!.id,
+          product_id: item.productId,
+          variant_id: item.variantId,
+          quantity: item.quantity
+        }));
+        await supabase.from('cart_items').insert(itemsToInsert);
+      }
+    } catch (err) {
+      console.error('Error syncing cart to database:', err);
+    }
+  });
+};
 
 export const useCartStore = create<CartStore>()(
   persist(
@@ -39,53 +85,99 @@ export const useCartStore = create<CartStore>()(
             (item) => item.variantId === variant.id
           );
 
+          const maxStock = variant.inventory_quantity;
+          const newItems = [...state.items];
+
           if (existingIndex >= 0) {
-            const newItems = [...state.items];
+            const currentQty = state.items[existingIndex].quantity;
+            const targetQty = currentQty + quantity;
+            const clampedQty = Math.min(maxStock, targetQty);
+
+            if (clampedQty < targetQty) {
+              useToastStore.getState().addToast({
+                type: 'warning',
+                title: 'Quantity limited',
+                message: `Only ${maxStock} units are available. Capped your cart quantity.`,
+              });
+            }
+
             newItems[existingIndex] = {
               ...newItems[existingIndex],
-              quantity: newItems[existingIndex].quantity + quantity,
+              quantity: clampedQty,
             };
-            return { items: newItems };
+          } else {
+            const clampedQty = Math.min(maxStock, quantity);
+            if (clampedQty < quantity) {
+              useToastStore.getState().addToast({
+                type: 'warning',
+                title: 'Quantity limited',
+                message: `Only ${maxStock} units are available. Capped your cart quantity.`,
+              });
+            }
+
+            newItems.push({
+              productId: product.id,
+              variantId: variant.id,
+              product,
+              variant,
+              quantity: clampedQty,
+              images: product.images || [],
+            });
           }
 
-          return {
-            items: [
-              ...state.items,
-              {
-                productId: product.id,
-                variantId: variant.id,
-                product,
-                variant,
-                quantity,
-                images: product.images || [],
-              },
-            ],
-          };
+          syncCartToDb(newItems);
+          return { items: newItems };
         });
       },
 
       removeItem: (variantId) => {
-        set((state) => ({
-          items: state.items.filter((item) => item.variantId !== variantId),
-        }));
+        set((state) => {
+          const newItems = state.items.filter((item) => item.variantId !== variantId);
+          syncCartToDb(newItems);
+          return { items: newItems };
+        });
       },
 
       updateQuantity: (variantId, quantity) => {
         set((state) => {
           if (quantity <= 0) {
-            return {
-              items: state.items.filter((item) => item.variantId !== variantId),
-            };
+            const newItems = state.items.filter((item) => item.variantId !== variantId);
+            syncCartToDb(newItems);
+            return { items: newItems };
           }
-          return {
-            items: state.items.map((item) =>
-              item.variantId === variantId ? { ...item, quantity } : item
-            ),
-          };
+
+          const existingIndex = state.items.findIndex(
+            (item) => item.variantId === variantId
+          );
+
+          if (existingIndex >= 0) {
+            const maxStock = state.items[existingIndex].variant.inventory_quantity;
+            const clampedQty = Math.min(maxStock, quantity);
+            if (clampedQty < quantity) {
+              useToastStore.getState().addToast({
+                type: 'warning',
+                title: 'Quantity limited',
+                message: `Capped at maximum stock of ${maxStock} units.`,
+              });
+            }
+
+            const newItems = [...state.items];
+            newItems[existingIndex] = {
+              ...newItems[existingIndex],
+              quantity: clampedQty,
+            };
+            syncCartToDb(newItems);
+            return { items: newItems };
+          }
+
+          return {};
         });
       },
 
-      clearCart: () => set({ items: [] }),
+      clearCart: () => {
+        set({ items: [] });
+        syncCartToDb([]);
+      },
 
       getItemCount: () => {
         return get().items.reduce((total, item) => total + item.quantity, 0);
@@ -113,6 +205,139 @@ export const useCartStore = create<CartStore>()(
       getItem: (variantId) => {
         return get().items.find((item) => item.variantId === variantId);
       },
+
+      mergeCart: async (userId) => {
+        try {
+          // 1. Fetch remote cart
+          const { data: cart } = await supabase
+            .from('carts')
+            .select('id')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          interface RemoteCartItem {
+            quantity: number;
+            product_id: string;
+            variant_id: string;
+            product: Product | Product[];
+            variant: ProductVariant | ProductVariant[];
+          }
+          let remoteItems: RemoteCartItem[] = [];
+          let cartId = cart?.id;
+
+          if (cartId) {
+            // Fetch remote cart items with product and variant
+            const { data } = await supabase
+              .from('cart_items')
+              .select(`
+                quantity,
+                product_id,
+                variant_id,
+                product:products(*),
+                variant:product_variants(*)
+              `)
+              .eq('cart_id', cartId);
+            
+            if (data) {
+              remoteItems = data;
+            }
+          } else {
+            // Create a new cart if it doesn't exist
+            const { data: newCart } = await supabase
+              .from('carts')
+              .insert({ user_id: userId, session_id: get().sessionId })
+              .select('id')
+              .single();
+            if (newCart) {
+              cartId = newCart.id;
+            }
+          }
+
+          // 2. Map remote items to CartItem format
+          const mappedRemoteItems: CartItem[] = [];
+          if (remoteItems.length > 0) {
+            // Collect all product IDs to fetch images for
+            const productIds = remoteItems.map(item => item.product_id);
+            const { data: imagesData } = await supabase
+              .from('product_images')
+              .select('*')
+              .in('product_id', productIds);
+
+            const imagesMap = new Map<string, ProductImage[]>();
+            if (imagesData) {
+              for (const img of imagesData) {
+                const list = imagesMap.get(img.product_id) || [];
+                list.push(img);
+                imagesMap.set(img.product_id, list);
+              }
+            }
+
+            for (const item of remoteItems) {
+              const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
+              const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
+              if (productObj && variantObj) {
+                const productImages = imagesMap.get(item.product_id) || [];
+                mappedRemoteItems.push({
+                  productId: item.product_id,
+                  variantId: item.variant_id,
+                  product: {
+                    ...productObj,
+                    images: productImages,
+                  },
+                  variant: variantObj,
+                  quantity: item.quantity,
+                  images: productImages,
+                });
+              }
+            }
+          }
+
+          // 3. Reconcile guest cart items and remote items
+          const guestItems = get().items;
+          const mergedMap = new Map<string, CartItem>();
+
+          // Add remote items first
+          for (const item of mappedRemoteItems) {
+            mergedMap.set(item.variantId, item);
+          }
+
+          // Merge guest items
+          for (const item of guestItems) {
+            const existing = mergedMap.get(item.variantId);
+            if (existing) {
+              const maxStock = item.variant.inventory_quantity;
+              const combinedQuantity = Math.min(maxStock, existing.quantity + item.quantity);
+              mergedMap.set(item.variantId, {
+                ...existing,
+                quantity: combinedQuantity,
+              });
+            } else {
+              mergedMap.set(item.variantId, item);
+            }
+          }
+
+          const finalItems = Array.from(mergedMap.values());
+
+          // 4. Update Zustand store state
+          set({ items: finalItems });
+
+          // 5. Update database cart items to match the final merged items
+          if (cartId) {
+            await supabase.from('cart_items').delete().eq('cart_id', cartId);
+            if (finalItems.length > 0) {
+              const itemsToInsert = finalItems.map(item => ({
+                cart_id: cartId,
+                product_id: item.productId,
+                variant_id: item.variantId,
+                quantity: item.quantity,
+              }));
+              await supabase.from('cart_items').insert(itemsToInsert);
+            }
+          }
+        } catch (err) {
+          console.error('Error merging cart:', err);
+        }
+      },
     }),
     {
       name: 'savana-cart',
@@ -124,7 +349,6 @@ export const useCartStore = create<CartStore>()(
     }
   )
 );
-
 // Wishlist Store
 interface WishlistStore {
   productIds: string[];
