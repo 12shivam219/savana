@@ -4,7 +4,7 @@ import { ArrowRight, Truck, RefreshCw, Shield, Star, Zap, Clock, TrendingUp, Awa
 import { Button } from '../components/ui';
 import { ProductGrid, CollectionCard } from '../components/product';
 import { supabase } from '../lib/supabase';
-import { cn } from '../lib/utils';
+import { cn, FREE_SHIPPING_THRESHOLD } from '../lib/utils';
 import type { Product, Collection, ProductImage, ProductVariant, Banner } from '../types';
 
 export default function HomePage() {
@@ -148,7 +148,7 @@ export default function HomePage() {
             <TrustBadge
               icon={Truck}
               title="FREE Shipping"
-              subtitle="Orders above INR 999"
+              subtitle={`Orders above INR ${FREE_SHIPPING_THRESHOLD}`}
               highlight
             />
             <TrustBadge

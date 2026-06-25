@@ -102,10 +102,13 @@ export function calculateTax(amount: number, rate: number = 18): number {
   return Math.round(amount * (rate / 100));
 }
 
+export const FREE_SHIPPING_THRESHOLD = 999;
+export const DEFAULT_SHIPPING_RATE = 99;
+
 export function calculateShipping(
   subtotal: number,
-  freeThreshold: number = 999,
-  baseRate: number = 99
+  freeThreshold: number = FREE_SHIPPING_THRESHOLD,
+  baseRate: number = DEFAULT_SHIPPING_RATE
 ): number {
   return subtotal >= freeThreshold ? 0 : baseRate;
 }

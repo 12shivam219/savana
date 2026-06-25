@@ -17,7 +17,7 @@ import { Button, Badge, PriceTag, Skeleton } from '../components/ui';
 import { QuantitySelector, ColorSelector, SizeSelector } from '../components/product';
 import { useCartStore, useWishlistStore, useToastStore } from '../stores';
 import { supabase } from '../lib/supabase';
-import { cn } from '../lib/utils';
+import { cn, FREE_SHIPPING_THRESHOLD } from '../lib/utils';
 import type { Product, ProductImage, ProductVariant } from '../types';
 
 export default function ProductPage() {
@@ -372,7 +372,7 @@ export default function ProductPage() {
               <Truck className="w-10 h-10 p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg text-primary-600" />
               <div>
                 <p className="text-sm font-semibold text-neutral-900 dark:text-white">FREE Express Shipping</p>
-                <p className="text-xs text-neutral-500">On orders above INR 999 • 3-5 business days</p>
+                <p className="text-xs text-neutral-500">On orders above INR {FREE_SHIPPING_THRESHOLD} • 3-5 business days</p>
               </div>
             </div>
             <div className="flex items-center gap-4">

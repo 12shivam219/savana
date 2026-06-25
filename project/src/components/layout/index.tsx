@@ -12,7 +12,7 @@ import {
   ChevronDown,
   MapPin,
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, FREE_SHIPPING_THRESHOLD } from '../../lib/utils';
 import { Button } from '../ui';
 import { useCartStore, useWishlistStore, useUIStore, useThemeStore } from '../../stores';
 import { useAuth } from '../../hooks/useAuth';
@@ -58,7 +58,7 @@ export function Header() {
   return (
     <>
       <div className="bg-primary-700 text-white text-sm py-2 px-4 text-center">
-        <p>Free shipping on orders above INR 999 | Use code WELCOME10 for 10% off</p>
+        <p>Free shipping on orders above INR {FREE_SHIPPING_THRESHOLD} | Use code WELCOME10 for 10% off</p>
       </div>
 
       <header

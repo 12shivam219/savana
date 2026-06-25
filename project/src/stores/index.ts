@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Product, ProductVariant, ToastMessage, ThemeMode, ProductImage } from '../types';
 import { supabase } from '../lib/supabase';
+import { FREE_SHIPPING_THRESHOLD, DEFAULT_SHIPPING_RATE } from '../lib/utils';
 
 interface CartItem {
   productId: string;
@@ -194,7 +195,7 @@ export const useCartStore = create<CartStore>()(
         return Math.round(get().getSubtotal() * (rate / 100));
       },
 
-      getShipping: (freeThreshold = 999, baseRate = 99) => {
+      getShipping: (freeThreshold = FREE_SHIPPING_THRESHOLD, baseRate = DEFAULT_SHIPPING_RATE) => {
         return get().getSubtotal() >= freeThreshold ? 0 : baseRate;
       },
 

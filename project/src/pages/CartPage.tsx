@@ -3,8 +3,7 @@ import { ShoppingBag, Trash2 } from 'lucide-react';
 import { Button, Card, EmptyState, PriceTag } from '../components/ui';
 import { QuantitySelector } from '../components/product';
 import { useCartStore } from '../stores';
-import { formatPrice } from '../lib/utils';
-import { cn } from '../lib/utils';
+import { formatPrice, cn, FREE_SHIPPING_THRESHOLD } from '../lib/utils';
 
 import { SafeProductImage } from '../components/product';
 
@@ -126,10 +125,10 @@ export default function CartPage() {
                 </span>
               </div>
 
-              {subtotal < 999 && (
+              {subtotal < FREE_SHIPPING_THRESHOLD && (
                 <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-3">
                   <p className="text-sm text-primary-700">
-                    Add {formatPrice(999 - subtotal)} more for free shipping!
+                    Add {formatPrice(FREE_SHIPPING_THRESHOLD - subtotal)} more for free shipping!
                   </p>
                 </div>
               )}

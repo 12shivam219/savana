@@ -162,34 +162,6 @@ export default function AdminOrders() {
 
   async function handleApproveReturn(order: Order) {
     try {
-      // 1. Fetch order items
-      const { data: orderItems, error: itemsError } = await supabase
-        .from('order_items')
-        .select('*')
-        .eq('order_id', order.id);
-      
-      if (itemsError) throw itemsError;
-
-      // 2. Replenish inventory
-      for (const item of (orderItems || [])) {
-        const { data: variant, error: varError } = await supabase
-          .from('product_variants')
-          .select('inventory_quantity')
-          .eq('id', item.variant_id)
-          .single();
-        if (varError) throw varError;
-
-        const newQty = (variant?.inventory_quantity || 0) + item.quantity;
-        await supabase
-          .from('product_variants')
-          .update({
-            inventory_quantity: newQty,
-            is_in_stock: newQty > 0
-          })
-          .eq('id', item.variant_id);
-      }
-
-      // 3. Update order notes and status to represent "Returned & Restocked"
       const parsedNotes = parseOrderNotes(order.notes);
       const returnEvent = {
         status: 'returned_restocked',
@@ -202,14 +174,12 @@ export default function AdminOrders() {
         events: [...parsedNotes.events, returnEvent]
       };
 
+      // Call postgres function to execute return and restock atomically
       const { error } = await supabase
-        .from('orders')
-        .update({
-          status: 'returned',
-          payment_status: 'refunded',
-          notes: JSON.stringify(updatedNotes)
-        })
-        .eq('id', order.id);
+        .rpc('approve_return_and_restock', {
+          p_order_id: order.id,
+          p_notes: JSON.stringify(updatedNotes)
+        });
 
       if (error) throw error;
       loadOrders();

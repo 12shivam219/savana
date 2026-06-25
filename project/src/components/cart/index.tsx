@@ -3,8 +3,7 @@ import { ShoppingBag, Trash2, Minus, Plus, Truck, Shield, RefreshCw, CreditCard 
 import { Drawer } from '../overlays';
 import { Button } from '../ui';
 import { useCartStore, useUIStore, useToastStore } from '../../stores';
-import { formatPrice } from '../../lib/utils';
-import { cn } from '../../lib/utils';
+import { formatPrice, cn, FREE_SHIPPING_THRESHOLD } from '../../lib/utils';
 
 import { SafeProductImage } from '../product';
 
@@ -41,18 +40,18 @@ export function CartDrawer() {
       ) : (
         <div className="flex flex-col h-full">
           {/* Free shipping progress */}
-          {subtotal < 999 && (
+          {subtotal < FREE_SHIPPING_THRESHOLD && (
             <div className="px-4 py-3 bg-primary-50 dark:bg-primary-900/20 border-b border-primary-100 dark:border-primary-900/30">
               <div className="flex items-center justify-between text-sm mb-2">
                 <span className="text-primary-700 dark:text-primary-300 font-medium">
-                  Add {formatPrice(999 - subtotal)} more for FREE shipping!
+                  Add {formatPrice(FREE_SHIPPING_THRESHOLD - subtotal)} more for FREE shipping!
                 </span>
-                <span className="text-xs text-primary-600">{Math.round((subtotal / 999) * 100)}%</span>
+                <span className="text-xs text-primary-600">{Math.round((subtotal / FREE_SHIPPING_THRESHOLD) * 100)}%</span>
               </div>
               <div className="w-full h-2 bg-primary-200 dark:bg-primary-900/50 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary-600 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.min((subtotal / 999) * 100, 100)}%` }}
+                  style={{ width: `${Math.min((subtotal / FREE_SHIPPING_THRESHOLD) * 100, 100)}%` }}
                 />
               </div>
             </div>
@@ -161,7 +160,7 @@ export function CartDrawer() {
             <div className="flex items-center justify-center gap-4 text-xs text-neutral-500 py-2">
               <span className="flex items-center gap-1">
                 <Truck className="w-3.5 h-3.5" />
-                Free Shipping 999+
+                Free Shipping {FREE_SHIPPING_THRESHOLD}+
               </span>
               <span className="flex items-center gap-1">
                 <RefreshCw className="w-3.5 h-3.5" />
