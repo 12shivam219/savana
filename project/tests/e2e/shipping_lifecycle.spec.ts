@@ -217,6 +217,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     }
 
     // Log in as Admin
+    await expect(page.locator('input[type="email"]').first()).toBeVisible({ timeout: 10000 });
     await page.locator('input[type="email"]').first().fill(ADMIN_EMAIL);
     await page.locator('input[type="password"]').first().fill(ADMIN_PASSWORD);
     await page.click('button[type="submit"]');
@@ -378,7 +379,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     }
     expect(fetchReturnRequestedErr).toBeNull();
     expect(dbOrderReturnRequested).toBeTruthy();
-    expect(dbOrderReturnRequested!.status).toBe('returned');
+    expect(dbOrderReturnRequested!.status).toBe('delivered');
     
     const returnMetadata = JSON.parse(dbOrderReturnRequested!.notes || '{}');
     expect(returnMetadata.return_status).toBe('requested');
@@ -402,6 +403,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     }
 
     // Log back in as Admin
+    await expect(page.locator('input[type="email"]').first()).toBeVisible({ timeout: 10000 });
     await page.locator('input[type="email"]').first().fill(ADMIN_EMAIL);
     await page.locator('input[type="password"]').first().fill(ADMIN_PASSWORD);
     await page.click('button[type="submit"]');

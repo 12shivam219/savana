@@ -189,6 +189,10 @@ export default function AdminOrders() {
   }
 
   function getStatusLabel(order: Order) {
+    const meta = parseOrderNotes(order.notes);
+    if (meta.return_status === 'requested') {
+      return 'Return Requested';
+    }
     if (order.status === 'pending') {
       return 'Pending Fulfillment';
     }
@@ -196,16 +200,19 @@ export default function AdminOrders() {
       return 'Unshipped';
     }
     if (order.status === 'returned') {
-      const meta = parseOrderNotes(order.notes);
       if (meta.return_status === 'returned_restocked') {
         return 'Returned & Restocked';
       }
-      return 'Return Requested';
+      return 'Returned';
     }
     return order.status.charAt(0).toUpperCase() + order.status.slice(1);
   }
 
   function getStatusColorClass(status: string, notes?: string | null) {
+    const meta = parseOrderNotes(notes);
+    if (meta.return_status === 'requested') {
+      return 'bg-warning-100 text-warning-700';
+    }
     if (status === 'pending' || status === 'processing') {
       return 'bg-warning-100 text-warning-700';
     }
@@ -216,11 +223,10 @@ export default function AdminOrders() {
       return 'bg-success-100 text-success-700';
     }
     if (status === 'returned') {
-      const meta = parseOrderNotes(notes);
       if (meta.return_status === 'returned_restocked') {
         return 'bg-neutral-100 text-neutral-700';
       }
-      return 'bg-warning-100 text-warning-700';
+      return 'bg-neutral-100 text-neutral-700';
     }
     return 'bg-neutral-100 text-neutral-700';
   }
@@ -347,7 +353,7 @@ export default function AdminOrders() {
                               <CheckCircle className="w-4 h-4" />
                             </button>
                           )}
-                           {order.status === 'returned' && (() => {
+                           {(() => {
                              const meta = parseOrderNotes(order.notes);
                              if (meta.return_status === 'requested') {
                                return (

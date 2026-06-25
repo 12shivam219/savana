@@ -55,19 +55,18 @@ const syncCartToDb = (items: CartItem[]) => {
         cart = newCart;
       }
 
-      // Delete existing items
-      await supabase.from('cart_items').delete().eq('cart_id', cart.id);
+      // Perform atomic sync using RPC function
+      const itemsToSync = items.map(item => ({
+        product_id: item.productId,
+        variant_id: item.variantId,
+        quantity: item.quantity
+      }));
 
-      // Insert current items
-      if (items.length > 0) {
-        const itemsToInsert = items.map(item => ({
-          cart_id: cart!.id,
-          product_id: item.productId,
-          variant_id: item.variantId,
-          quantity: item.quantity
-        }));
-        await supabase.from('cart_items').insert(itemsToInsert);
-      }
+      const { error: syncError } = await supabase.rpc('sync_user_cart', {
+        p_cart_id: cart.id,
+        p_items: itemsToSync
+      });
+      if (syncError) throw syncError;
     } catch (err) {
       console.error('Error syncing cart to database:', err);
     }

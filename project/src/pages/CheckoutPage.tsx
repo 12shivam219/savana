@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { CreditCard, Building2, Wallet, Truck, MapPin, Mail, Shield, RefreshCw } from 'lucide-react';
 import { Button, Input, Card } from '../components/ui';
@@ -40,6 +40,21 @@ export default function CheckoutPage() {
   const subtotal = roundPrice(getSubtotal());
   const tax = roundPrice(getTax());
   const shipping = roundPrice(getShipping());
+
+  // Coupon validation hook
+  useEffect(() => {
+    if (appliedCoupon) {
+      if (subtotal < Number(appliedCoupon.min_order_amount)) {
+        setAppliedCoupon(null);
+        setCouponError(`Minimum order amount of INR ${appliedCoupon.min_order_amount} required`);
+        addToast({
+          type: 'error',
+          title: 'Coupon Revoked',
+          message: `The active coupon was revoked as the cart subtotal fell below the minimum amount of INR ${appliedCoupon.min_order_amount}`,
+        });
+      }
+    }
+  }, [subtotal, appliedCoupon, addToast]);
 
   let rawDiscount = 0;
   if (appliedCoupon) {
@@ -191,6 +206,7 @@ export default function CheckoutPage() {
         p_payment_status: paymentMethod === 'cod' ? 'pending' : 'completed',
         p_items: orderItems,
         p_redeemed_points: redeemedPoints,
+        p_coupon_code: appliedCoupon?.code || null,
       });
 
       if (checkoutError) throw checkoutError;

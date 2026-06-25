@@ -48,6 +48,16 @@ const statusColors: Record<string, string> = {
 };
 
 function getStatusTextAndColor(status: string, notes?: string | null) {
+  try {
+    const meta = JSON.parse(notes || '{}');
+    if (meta.return_status === 'requested') {
+      return { text: 'Return Requested', colorClass: 'bg-neutral-100 text-neutral-700' };
+    }
+    if (meta.return_status === 'returned_restocked') {
+      return { text: 'Returned & Restocked', colorClass: 'bg-neutral-100 text-neutral-700' };
+    }
+  } catch { /* ignore */ }
+
   if (status === 'pending') {
     return { text: 'Pending Fulfillment', colorClass: 'bg-warning-100 text-warning-700' };
   }
@@ -55,13 +65,7 @@ function getStatusTextAndColor(status: string, notes?: string | null) {
     return { text: 'Unshipped', colorClass: 'bg-warning-100 text-warning-700' };
   }
   if (status === 'returned') {
-    try {
-      const meta = JSON.parse(notes || '{}');
-      if (meta.return_status === 'returned_restocked') {
-        return { text: 'Returned & Restocked', colorClass: 'bg-neutral-100 text-neutral-700' };
-      }
-    } catch { /* ignore */ }
-    return { text: 'Return Requested', colorClass: 'bg-neutral-100 text-neutral-700' };
+    return { text: 'Returned', colorClass: 'bg-neutral-100 text-neutral-700' };
   }
   const labels: Record<string, string> = {
     confirmed: 'Confirmed',
@@ -91,42 +95,11 @@ export default function OrdersPage() {
     try {
       setProcessingOrderId(orderId);
 
-      // 1. Fetch order items to know what to replenish
-      let orderItems = itemsByOrder[orderId];
-      if (!orderItems) {
-        const { data, error } = await supabase
-          .from('order_items')
-          .select('*')
-          .eq('order_id', orderId);
-        if (error) throw error;
-        orderItems = (data as OrderItem[]) || [];
-      }
-
-      // 2. Update order status to 'cancelled' and payment_status to 'refunded'
-      const { error: orderError } = await supabase
-        .from('orders')
-        .update({ status: 'cancelled', payment_status: 'refunded' })
-        .eq('id', orderId);
-      if (orderError) throw orderError;
-
-      // 3. Replenish inventory
-      for (const item of (orderItems || [])) {
-        const { data: variant, error: varError } = await supabase
-          .from('product_variants')
-          .select('inventory_quantity')
-          .eq('id', item.variant_id)
-          .single();
-        if (varError) throw varError;
-
-        const newQty = (variant?.inventory_quantity || 0) + item.quantity;
-        await supabase
-          .from('product_variants')
-          .update({
-            inventory_quantity: newQty,
-            is_in_stock: newQty > 0
-          })
-          .eq('id', item.variant_id);
-      }
+      // Call database RPC to cancel the order and replenish stock atomically
+      const { error } = await supabase.rpc('cancel_order', {
+        p_order_id: orderId,
+      });
+      if (error) throw error;
 
       addToast({
         type: 'success',
@@ -178,12 +151,10 @@ export default function OrdersPage() {
         events: [...events, returnRequestedEvent]
       };
 
-      // Update order status to 'returned' and store metadata in notes
+      // Update order metadata in notes only
       const { error: orderError } = await supabase
         .from('orders')
         .update({
-          status: 'returned',
-          payment_status: 'refunded',
           notes: JSON.stringify(updatedNotes)
         })
         .eq('id', orderId);
@@ -326,52 +297,64 @@ export default function OrdersPage() {
             </div>
 
             {/* Visual Tracking Timeline */}
-            {order.status !== 'cancelled' && order.status !== 'returned' && (
-              <div className="my-6 px-4">
-                <div className="flex items-center justify-between max-w-xl mx-auto relative">
-                  <div className="absolute left-0 right-0 top-4 -translate-y-1/2 h-1 bg-neutral-200 dark:bg-neutral-700 z-0" />
-                  <div 
-                    className="absolute left-0 top-4 -translate-y-1/2 h-1 bg-primary-600 transition-all duration-500 z-0" 
-                    style={{ 
-                      width: `${
-                        order.status === 'pending' ? '0%' :
-                        order.status === 'processing' ? '33.33%' :
-                        order.status === 'shipped' ? '66.66%' :
-                        order.status === 'delivered' ? '100%' : '0%'
-                      }`
-                    }}
-                  />
-                  
-                  {['pending', 'processing', 'shipped', 'delivered'].map((step, idx) => {
-                    const stepLabels: Record<string, string> = {
-                      pending: 'Ordered',
-                      processing: 'Fulfilled',
-                      shipped: 'Shipped',
-                      delivered: 'Delivered',
-                    };
+            {(() => {
+              let isReturnOrCancelled = order.status === 'cancelled' || order.status === 'returned';
+              try {
+                const meta = JSON.parse(order.notes || '{}');
+                if (meta.return_status === 'requested' || meta.return_status === 'returned_restocked') {
+                  isReturnOrCancelled = true;
+                }
+              } catch { /* ignore */ }
+              
+              if (isReturnOrCancelled) return null;
+
+              return (
+                <div className="my-6 px-4">
+                  <div className="flex items-center justify-between max-w-xl mx-auto relative">
+                    <div className="absolute left-0 right-0 top-4 -translate-y-1/2 h-1 bg-neutral-200 dark:bg-neutral-700 z-0" />
+                    <div 
+                      className="absolute left-0 top-4 -translate-y-1/2 h-1 bg-primary-600 transition-all duration-500 z-0" 
+                      style={{ 
+                        width: `${
+                          order.status === 'pending' ? '0%' :
+                          order.status === 'processing' ? '33.33%' :
+                          order.status === 'shipped' ? '66.66%' :
+                          order.status === 'delivered' ? '100%' : '0%'
+                        }`
+                      }}
+                    />
                     
-                    const orderStatuses = ['pending', 'processing', 'shipped', 'delivered'];
-                    const currentIdx = orderStatuses.indexOf(order.status);
-                    const isCompleted = orderStatuses.indexOf(step) <= currentIdx;
-                    
-                    return (
-                      <div key={step} className="flex flex-col items-center z-10 relative" id={`timeline-step-${order.order_number}-${step}`}>
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm transition-all duration-300 ${
-                          isCompleted 
-                            ? 'bg-primary-600 text-white ring-4 ring-primary-100 dark:ring-primary-900/30' 
-                            : 'bg-neutral-200 text-neutral-500 dark:bg-neutral-800'
-                        }`}>
-                          {idx + 1}
+                    {['pending', 'processing', 'shipped', 'delivered'].map((step, idx) => {
+                      const stepLabels: Record<string, string> = {
+                        pending: 'Ordered',
+                        processing: 'Fulfilled',
+                        shipped: 'Shipped',
+                        delivered: 'Delivered',
+                      };
+                      
+                      const orderStatuses = ['pending', 'processing', 'shipped', 'delivered'];
+                      const currentIdx = orderStatuses.indexOf(order.status);
+                      const isCompleted = orderStatuses.indexOf(step) <= currentIdx;
+                      
+                      return (
+                        <div key={step} className="flex flex-col items-center z-10 relative" id={`timeline-step-${order.order_number}-${step}`}>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm transition-all duration-300 ${
+                            isCompleted 
+                              ? 'bg-primary-600 text-white ring-4 ring-primary-100 dark:ring-primary-900/30' 
+                              : 'bg-neutral-200 text-neutral-500 dark:bg-neutral-800'
+                          }`}>
+                            {idx + 1}
+                          </div>
+                          <span className={`text-xs mt-2 font-medium ${isCompleted ? 'text-primary-600 font-semibold' : 'text-neutral-500'}`}>
+                            {stepLabels[step]}
+                          </span>
                         </div>
-                        <span className={`text-xs mt-2 font-medium ${isCompleted ? 'text-primary-600 font-semibold' : 'text-neutral-500'}`}>
-                          {stepLabels[step]}
-                        </span>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Carrier Info & Clickable Link */}
             {order.tracking_number && (
@@ -429,23 +412,35 @@ export default function OrdersPage() {
                     Cancel Order
                   </Button>
                 )}
-                {order.status === 'delivered' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-warning-600 text-warning-600 hover:bg-warning-50"
-                    onClick={() => {
-                      const reason = window.prompt("Please enter a return reason:", "Item didn't fit");
-                      if (reason !== null) {
-                        handleReturnOrder(order.id, reason || "No reason provided");
-                      }
-                    }}
-                    disabled={processingOrderId !== null}
-                    id={`return-btn-${order.order_number}`}
-                  >
-                    Request Return
-                  </Button>
-                )}
+                {order.status === 'delivered' && (() => {
+                  let hasRequestedReturn = false;
+                  try {
+                    const meta = JSON.parse(order.notes || '{}');
+                    if (meta.return_status === 'requested' || meta.return_status === 'returned_restocked') {
+                      hasRequestedReturn = true;
+                    }
+                  } catch { /* ignore */ }
+
+                  if (hasRequestedReturn) return null;
+
+                  return (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-warning-600 text-warning-600 hover:bg-warning-50"
+                      onClick={() => {
+                        const reason = window.prompt("Please enter a return reason:", "Item didn't fit");
+                        if (reason !== null) {
+                          handleReturnOrder(order.id, reason || "No reason provided");
+                        }
+                      }}
+                      disabled={processingOrderId !== null}
+                      id={`return-btn-${order.order_number}`}
+                    >
+                      Request Return
+                    </Button>
+                  );
+                })()}
                 <Button
                   variant="outline"
                   size="sm"
