@@ -207,136 +207,142 @@ export const useCartStore = create<CartStore>()(
       },
 
       mergeCart: async (userId) => {
-        try {
-          // 1. Fetch remote cart
-          const { data: cart } = await supabase
-            .from('carts')
-            .select('id')
-            .eq('user_id', userId)
-            .maybeSingle();
+        return new Promise<void>((resolve, reject) => {
+          syncPromise = syncPromise.then(async () => {
+            try {
+              // 1. Fetch remote cart
+              const { data: cart } = await supabase
+                .from('carts')
+                .select('id')
+                .eq('user_id', userId)
+                .maybeSingle();
 
-          interface RemoteCartItem {
-            quantity: number;
-            product_id: string;
-            variant_id: string;
-            product: Product | Product[];
-            variant: ProductVariant | ProductVariant[];
-          }
-          let remoteItems: RemoteCartItem[] = [];
-          let cartId = cart?.id;
-
-          if (cartId) {
-            // Fetch remote cart items with product and variant
-            const { data } = await supabase
-              .from('cart_items')
-              .select(`
-                quantity,
-                product_id,
-                variant_id,
-                product:products(*),
-                variant:product_variants(*)
-              `)
-              .eq('cart_id', cartId);
-            
-            if (data) {
-              remoteItems = data;
-            }
-          } else {
-            // Create a new cart if it doesn't exist
-            const { data: newCart } = await supabase
-              .from('carts')
-              .insert({ user_id: userId, session_id: get().sessionId })
-              .select('id')
-              .single();
-            if (newCart) {
-              cartId = newCart.id;
-            }
-          }
-
-          // 2. Map remote items to CartItem format
-          const mappedRemoteItems: CartItem[] = [];
-          if (remoteItems.length > 0) {
-            // Collect all product IDs to fetch images for
-            const productIds = remoteItems.map(item => item.product_id);
-            const { data: imagesData } = await supabase
-              .from('product_images')
-              .select('*')
-              .in('product_id', productIds);
-
-            const imagesMap = new Map<string, ProductImage[]>();
-            if (imagesData) {
-              for (const img of imagesData) {
-                const list = imagesMap.get(img.product_id) || [];
-                list.push(img);
-                imagesMap.set(img.product_id, list);
+              interface RemoteCartItem {
+                quantity: number;
+                product_id: string;
+                variant_id: string;
+                product: Product | Product[];
+                variant: ProductVariant | ProductVariant[];
               }
-            }
+              let remoteItems: RemoteCartItem[] = [];
+              let cartId = cart?.id;
 
-            for (const item of remoteItems) {
-              const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
-              const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
-              if (productObj && variantObj) {
-                const productImages = imagesMap.get(item.product_id) || [];
-                mappedRemoteItems.push({
-                  productId: item.product_id,
-                  variantId: item.variant_id,
-                  product: {
-                    ...productObj,
-                    images: productImages,
-                  },
-                  variant: variantObj,
-                  quantity: item.quantity,
-                  images: productImages,
-                });
+              if (cartId) {
+                // Fetch remote cart items with product and variant
+                const { data } = await supabase
+                  .from('cart_items')
+                  .select(`
+                    quantity,
+                    product_id,
+                    variant_id,
+                    product:products(*),
+                    variant:product_variants(*)
+                  `)
+                  .eq('cart_id', cartId);
+                
+                if (data) {
+                  remoteItems = data;
+                }
+              } else {
+                // Create a new cart if it doesn't exist
+                const { data: newCart } = await supabase
+                  .from('carts')
+                  .insert({ user_id: userId, session_id: get().sessionId })
+                  .select('id')
+                  .single();
+                if (newCart) {
+                  cartId = newCart.id;
+                }
               }
+
+              // 2. Map remote items to CartItem format
+              const mappedRemoteItems: CartItem[] = [];
+              if (remoteItems.length > 0) {
+                // Collect all product IDs to fetch images for
+                const productIds = remoteItems.map(item => item.product_id);
+                const { data: imagesData } = await supabase
+                  .from('product_images')
+                  .select('*')
+                  .in('product_id', productIds);
+
+                const imagesMap = new Map<string, ProductImage[]>();
+                if (imagesData) {
+                  for (const img of imagesData) {
+                    const list = imagesMap.get(img.product_id) || [];
+                    list.push(img);
+                    imagesMap.set(img.product_id, list);
+                  }
+                }
+
+                for (const item of remoteItems) {
+                  const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
+                  const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
+                  if (productObj && variantObj) {
+                    const productImages = imagesMap.get(item.product_id) || [];
+                    mappedRemoteItems.push({
+                      productId: item.product_id,
+                      variantId: item.variant_id,
+                      product: {
+                        ...productObj,
+                        images: productImages,
+                      },
+                      variant: variantObj,
+                      quantity: item.quantity,
+                      images: productImages,
+                    });
+                  }
+                }
+              }
+
+              // 3. Reconcile guest cart items and remote items
+              const guestItems = get().items;
+              const mergedMap = new Map<string, CartItem>();
+
+              // Add remote items first
+              for (const item of mappedRemoteItems) {
+                mergedMap.set(item.variantId, item);
+              }
+
+              // Merge guest items
+              for (const item of guestItems) {
+                const existing = mergedMap.get(item.variantId);
+                if (existing) {
+                  const maxStock = item.variant.inventory_quantity;
+                  const combinedQuantity = Math.min(maxStock, existing.quantity + item.quantity);
+                  mergedMap.set(item.variantId, {
+                    ...existing,
+                    quantity: combinedQuantity,
+                  });
+                } else {
+                  mergedMap.set(item.variantId, item);
+                }
+              }
+
+              const finalItems = Array.from(mergedMap.values());
+
+              // 4. Update Zustand store state
+              set({ items: finalItems });
+
+              // 5. Update database cart items to match the final merged items
+              if (cartId) {
+                await supabase.from('cart_items').delete().eq('cart_id', cartId);
+                if (finalItems.length > 0) {
+                  const itemsToInsert = finalItems.map(item => ({
+                    cart_id: cartId,
+                    product_id: item.productId,
+                    variant_id: item.variantId,
+                    quantity: item.quantity,
+                  }));
+                  await supabase.from('cart_items').insert(itemsToInsert);
+                }
+              }
+              resolve();
+            } catch (err) {
+              console.error('Error merging cart:', err);
+              reject(err);
             }
-          }
-
-          // 3. Reconcile guest cart items and remote items
-          const guestItems = get().items;
-          const mergedMap = new Map<string, CartItem>();
-
-          // Add remote items first
-          for (const item of mappedRemoteItems) {
-            mergedMap.set(item.variantId, item);
-          }
-
-          // Merge guest items
-          for (const item of guestItems) {
-            const existing = mergedMap.get(item.variantId);
-            if (existing) {
-              const maxStock = item.variant.inventory_quantity;
-              const combinedQuantity = Math.min(maxStock, existing.quantity + item.quantity);
-              mergedMap.set(item.variantId, {
-                ...existing,
-                quantity: combinedQuantity,
-              });
-            } else {
-              mergedMap.set(item.variantId, item);
-            }
-          }
-
-          const finalItems = Array.from(mergedMap.values());
-
-          // 4. Update Zustand store state
-          set({ items: finalItems });
-
-          // 5. Update database cart items to match the final merged items
-          if (cartId) {
-            await supabase.from('cart_items').delete().eq('cart_id', cartId);
-            if (finalItems.length > 0) {
-              const itemsToInsert = finalItems.map(item => ({
-                cart_id: cartId,
-                product_id: item.productId,
-                variant_id: item.variantId,
-                quantity: item.quantity,
-              }));
-              await supabase.from('cart_items').insert(itemsToInsert);
-            }
-          }
-        } catch (err) {
-          console.error('Error merging cart:', err);
-        }
+          });
+        });
       },
     }),
     {

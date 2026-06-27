@@ -32,6 +32,10 @@ BEGIN
     v_new_balance := v_current_balance + p_points;
   END IF;
 
+  IF v_new_balance < 0 THEN
+    RAISE EXCEPTION 'Insufficient loyalty points balance. Available: %, Requested Redemption: %', v_current_balance, p_points;
+  END IF;
+
   UPDATE public.profiles
   SET loyalty_points = v_new_balance,
       updated_at = now()

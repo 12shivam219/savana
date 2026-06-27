@@ -117,13 +117,10 @@ BEGIN
         END IF;
       END IF;
     END IF;
-    
-    v_points_discount := p_redeemed_points * 0.1;
-    v_calculated_discount := round(v_coupon_discount + v_points_discount, 2);
-  ELSE
-    -- Fallback: trust p_discount_amount if no coupon code parameter is passed
-    v_calculated_discount := p_discount_amount;
   END IF;
+  
+  v_points_discount := p_redeemed_points * 0.1;
+  v_calculated_discount := round(v_coupon_discount + v_points_discount, 2);
 
   -- Compute final total
   v_recalculated_total := greatest(0, v_recalculated_subtotal + v_recalculated_tax + v_recalculated_shipping - v_calculated_discount);

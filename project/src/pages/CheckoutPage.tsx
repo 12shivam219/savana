@@ -70,9 +70,10 @@ export default function CheckoutPage() {
   const discount = roundPrice(rawDiscount);
 
   const orderTotalBeforePoints = roundPrice(Math.max(0, subtotal + tax + shipping - discount));
-  const maxPointsDiscount = orderTotalBeforePoints;
-  const pointsDiscount = roundPrice(useLoyaltyPoints ? Math.min(maxPointsDiscount, (user?.loyalty_points || 0) * 0.1) : 0);
-  const redeemedPoints = useLoyaltyPoints ? Math.round(pointsDiscount * 10) : 0;
+  const maxPointsAvailable = user?.loyalty_points || 0;
+  const maxPointsNeeded = Math.floor(orderTotalBeforePoints * 10);
+  const redeemedPoints = useLoyaltyPoints ? Math.min(maxPointsAvailable, maxPointsNeeded) : 0;
+  const pointsDiscount = roundPrice(redeemedPoints * 0.1);
   const total = roundPrice(Math.max(0, orderTotalBeforePoints - pointsDiscount));
 
   const handleApplyCoupon = async () => {

@@ -11,6 +11,7 @@ interface OrderNotes {
   tracking_number?: string;
   return_reason?: string;
   return_status?: string;
+  admin_notes?: string;
 }
 
 const parseOrderNotes = (notes: string | null | undefined): OrderNotes => {
@@ -20,17 +21,18 @@ const parseOrderNotes = (notes: string | null | undefined): OrderNotes => {
     if (Array.isArray(parsed)) {
       return { events: parsed };
     }
-    if (parsed && typeof parsed === 'object') {
+    if (parsed && typeof parsed === 'object' && parsed !== null) {
       return {
         events: Array.isArray(parsed.events) ? parsed.events : [],
         carrier: parsed.carrier,
         tracking_number: parsed.tracking_number,
         return_reason: parsed.return_reason,
-        return_status: parsed.return_status
+        return_status: parsed.return_status,
+        admin_notes: parsed.admin_notes
       };
     }
   } catch (e) {
-    console.error('Error parsing order notes:', e);
+    return { events: [], admin_notes: notes };
   }
   return { events: [] };
 };

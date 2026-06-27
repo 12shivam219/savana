@@ -128,14 +128,20 @@ export default function OrdersPage() {
       let currentNotes: any = {};
       try {
         if (order?.notes) {
-          const parsed = JSON.parse(order.notes || '{}');
+          const parsed = JSON.parse(order.notes);
           if (Array.isArray(parsed)) {
             currentNotes = { events: parsed };
-          } else if (parsed && typeof parsed === 'object') {
+          } else if (parsed && typeof parsed === 'object' && parsed !== null) {
             currentNotes = parsed;
+          } else {
+            currentNotes = { admin_notes: String(parsed) };
           }
         }
-      } catch { /* ignore */ }
+      } catch {
+        if (order?.notes) {
+          currentNotes = { admin_notes: order.notes };
+        }
+      }
 
       const events = Array.isArray(currentNotes.events) ? currentNotes.events : [];
       const returnRequestedEvent = {
