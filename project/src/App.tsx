@@ -6,9 +6,8 @@ import { ToastContainer } from './components/overlays';
 import { AuthProvider } from './hooks/useAuth';
 import { useThemeStore } from './stores';
 import { Spinner } from './components/ui';
-import StaticPage from './pages/StaticPage';
-
 // Lazy load pages for better performance
+const StaticPage = lazy(() => import('./pages/StaticPage'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ProductPage = lazy(() => import('./pages/ProductPage'));
 const CollectionPage = lazy(() => import('./pages/CollectionPage'));
@@ -19,13 +18,25 @@ const CartPage = lazy(() => import('./pages/CartPage'));
 const CheckoutPage = lazy(() => import('./pages/CheckoutPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
 const AccountPage = lazy(() => import('./pages/AccountPage'));
 const AddressesPage = lazy(() => import('./pages/AddressesPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const WishlistPage = lazy(() => import('./pages/WishlistPage'));
 const OrdersPage = lazy(() => import('./pages/OrdersPage'));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
-import { AdminLayout, AdminDashboard, AdminProducts, AdminOrders } from './components/admin';
+
+// Lazy load admin pages
+const AdminLayout = lazy(() => import('./components/admin/AdminLayout').then(module => ({ default: module.AdminLayout })));
+const AdminDashboard = lazy(() => import('./components/admin/Dashboard'));
+const AdminProducts = lazy(() => import('./components/admin/AdminProducts'));
+const AdminNewProduct = lazy(() => import('./components/admin/AdminNewProduct'));
+const AdminOrders = lazy(() => import('./components/admin/AdminOrders'));
+const AdminCustomers = lazy(() => import('./components/admin/AdminCustomers'));
+const AdminCoupons = lazy(() => import('./components/admin/AdminCoupons'));
+const AdminAnalytics = lazy(() => import('./components/admin/AdminAnalytics'));
+const AdminSettings = lazy(() => import('./components/admin/AdminSettings'));
 
 // Scroll to top on route change
 function ScrollToTop() {
@@ -70,9 +81,10 @@ function AppContent() {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
         <ScrollToTop />
-        <Layout>
-          <Suspense fallback={<PageLoader />}>
-            <Routes>
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            {/* Storefront Layout */}
+            <Route element={<Layout />}>
               <Route path="/" element={<HomePage />} />
               <Route path="/shop" element={<ShopPage />} />
               <Route path="/product/:slug" element={<ProductPage />} />
@@ -83,6 +95,8 @@ function AppContent() {
               <Route path="/checkout" element={<CheckoutPage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
+              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+              <Route path="/reset-password" element={<ResetPasswordPage />} />
               <Route path="/account" element={<AccountPage />} />
               <Route path="/account/addresses" element={<AddressesPage />} />
               <Route path="/account/settings" element={<SettingsPage />} />
@@ -95,15 +109,22 @@ function AppContent() {
               <Route path="/returns" element={<StaticPage slug="returns" />} />
               <Route path="/privacy" element={<StaticPage slug="privacy" />} />
               <Route path="/terms" element={<StaticPage slug="terms" />} />
-              <Route path="/admin" element={<AdminLayout />}>
-                <Route index element={<AdminDashboard />} />
-                <Route path="products" element={<AdminProducts />} />
-                <Route path="orders" element={<AdminOrders />} />
-              </Route>
               <Route path="*" element={<NotFoundPage />} />
-            </Routes>
-          </Suspense>
-        </Layout>
+            </Route>
+
+            {/* Admin Layout without Storefront Header/Footer */}
+            <Route path="/admin" element={<AdminLayout />}>
+              <Route index element={<AdminDashboard />} />
+              <Route path="products" element={<AdminProducts />} />
+              <Route path="products/new" element={<AdminNewProduct />} />
+              <Route path="orders" element={<AdminOrders />} />
+              <Route path="customers" element={<AdminCustomers />} />
+              <Route path="coupons" element={<AdminCoupons />} />
+              <Route path="analytics" element={<AdminAnalytics />} />
+              <Route path="settings" element={<AdminSettings />} />
+            </Route>
+          </Routes>
+        </Suspense>
         <CartDrawer />
         <ToastContainer />
       </AuthProvider>

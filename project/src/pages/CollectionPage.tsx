@@ -27,7 +27,7 @@ export default function CollectionPage() {
     try {
       const { data: collectionData, error } = await supabase
         .from('collections')
-        .select('*')
+        .select('*, products(*, product_images(*), product_variants(*))')
         .eq('slug', collectionSlug)
         .eq('is_active', true)
         .single();
@@ -37,29 +37,18 @@ export default function CollectionPage() {
 
       setCollection(collectionData);
 
-      const { data: productsData } = await supabase
-        .from('products')
-        .select('*')
-        .eq('collection_id', collectionData.id)
-        .eq('is_active', true)
-        .limit(20);
+      const collectionProducts = (collectionData as unknown as { products: unknown[] }).products || [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const activeProducts = collectionProducts.filter((p: any) => p.is_active);
 
-      if (productsData && productsData.length > 0) {
-        const productIds = productsData.map((p) => p.id);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const productsWithDetails = activeProducts.map((product: any) => ({
+        product,
+        images: product.product_images || [],
+        variants: product.product_variants || [],
+      }));
 
-        const [imagesResult, variantsResult] = await Promise.all([
-          supabase.from('product_images').select('*').in('product_id', productIds),
-          supabase.from('product_variants').select('*').in('product_id', productIds),
-        ]);
-
-        const productsWithDetails = productsData.map((product) => ({
-          product,
-          images: imagesResult.data?.filter((img) => img.product_id === product.id) || [],
-          variants: variantsResult.data?.filter((v) => v.product_id === product.id) || [],
-        }));
-
-        setProducts(productsWithDetails);
-      }
+      setProducts(productsWithDetails);
     } catch (error) {
       console.error('Error loading collection:', error);
     } finally {

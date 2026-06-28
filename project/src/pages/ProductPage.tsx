@@ -17,6 +17,7 @@ import { Button, Badge, PriceTag, Skeleton } from '../components/ui';
 import { QuantitySelector, ColorSelector, SizeSelector } from '../components/product';
 import { useCartStore, useWishlistStore, useToastStore } from '../stores';
 import { supabase } from '../lib/supabase';
+import DOMPurify from 'dompurify';
 import { cn, FREE_SHIPPING_THRESHOLD } from '../lib/utils';
 import type { Product, ProductImage, ProductVariant } from '../types';
 
@@ -47,7 +48,7 @@ export default function ProductPage() {
     try {
       const { data: productData, error } = await supabase
         .from('products')
-        .select('*')
+        .select('*, product_images(*), product_variants(*)')
         .eq('slug', productSlug)
         .eq('is_active', true)
         .single();
@@ -57,16 +58,15 @@ export default function ProductPage() {
 
       setProduct(productData);
 
-      const [imagesResult, variantsResult] = await Promise.all([
-        supabase.from('product_images').select('*').eq('product_id', productData.id).order('sort_order'),
-        supabase.from('product_variants').select('*').eq('product_id', productData.id),
-      ]);
+      const productImages = productData.product_images || [];
+      const sortedImages = [...productImages].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      setImages(sortedImages);
+      
+      const productVariants = productData.product_variants || [];
+      setVariants(productVariants);
 
-      setImages(imagesResult.data || []);
-      setVariants(variantsResult.data || []);
-
-      if (variantsResult.data && variantsResult.data.length > 0) {
-        const firstVariant = variantsResult.data[0];
+      if (productVariants.length > 0) {
+        const firstVariant = productVariants[0];
         setSelectedSize(firstVariant.size);
         setSelectedColor(firstVariant.color);
       }
@@ -194,7 +194,7 @@ export default function ProductPage() {
             )}
 
             <div className="absolute top-4 left-4 flex flex-col gap-2">
-              {product.sale_price && product.sale_price < product.base_price && (
+              {product.sale_price !== null && product.sale_price !== undefined && Number(product.sale_price) < Number(product.base_price) && (
                 <Badge variant="accent">
                   {Math.round(((product.base_price - product.sale_price) / product.base_price) * 100)}% OFF
                 </Badge>
@@ -404,9 +404,10 @@ export default function ProductPage() {
                 <span className="font-medium">Product Details</span>
                 <ChevronDown className="w-5 h-5 text-neutral-500 group-open:rotate-180 transition-transform" />
               </summary>
-              <div className="py-4 text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap">
-                {product.description}
-              </div>
+              <div 
+                className="py-4 text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap prose prose-neutral dark:prose-invert max-w-none"
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(product.description) }}
+              />
             </details>
 
             {product.fabric_material && (

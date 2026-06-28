@@ -63,7 +63,7 @@ export function CartDrawer() {
               const price = item.product.sale_price || item.product.base_price;
               const itemTotal = price * item.quantity;
               const primaryImage = item.images?.[0]?.url || item.product.images?.[0]?.url || '/placeholder.svg';
-              const hasDiscount = item.product.sale_price && item.product.sale_price < item.product.base_price;
+              const hasDiscount = item.product.sale_price !== null && item.product.sale_price !== undefined && Number(item.product.sale_price) < Number(item.product.base_price);
 
               return (
                 <div

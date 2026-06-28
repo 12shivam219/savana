@@ -35,35 +35,21 @@ export default function HomePage() {
     setLoading(true);
     try {
       const [featuredRes, bestSellersRes, newArrivalsRes] = await Promise.all([
-        supabase.from('products').select('*').eq('is_featured', true).eq('is_active', true).limit(4),
-        supabase.from('products').select('*').eq('is_best_seller', true).eq('is_active', true).limit(4),
-        supabase.from('products').select('*').eq('is_new_arrival', true).eq('is_active', true).limit(4),
+        supabase.from('products').select('*, product_images(*), product_variants(*)').eq('is_featured', true).eq('is_active', true).limit(4),
+        supabase.from('products').select('*, product_images(*), product_variants(*)').eq('is_best_seller', true).eq('is_active', true).limit(4),
+        supabase.from('products').select('*, product_images(*), product_variants(*)').eq('is_new_arrival', true).eq('is_active', true).limit(4),
       ]);
 
-      const allProducts = [
-        ...(featuredRes.data || []),
-        ...(bestSellersRes.data || []),
-        ...(newArrivalsRes.data || []),
-      ];
-      const uniqueProducts = Array.from(new Map(allProducts.map(p => [p.id, p])).values());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const buildProductData = (products: any[]) => products.map((product) => ({
+        product,
+        images: product.product_images || [],
+        variants: product.product_variants || [],
+      }));
 
-      if (uniqueProducts.length > 0) {
-        const productIds = uniqueProducts.map((p) => p.id);
-        const [imagesResult, variantsResult] = await Promise.all([
-          supabase.from('product_images').select('*').in('product_id', productIds),
-          supabase.from('product_variants').select('*').in('product_id', productIds),
-        ]);
-
-        const buildProductData = (products: Product[]) => products.map((product) => ({
-          product,
-          images: imagesResult.data?.filter((img) => img.product_id === product.id) || [],
-          variants: variantsResult.data?.filter((v) => v.product_id === product.id) || [],
-        }));
-
-        setFeaturedProducts(buildProductData(featuredRes.data || []));
-        setBestSellers(buildProductData(bestSellersRes.data || []));
-        setNewArrivals(buildProductData(newArrivalsRes.data || []));
-      }
+      setFeaturedProducts(buildProductData(featuredRes.data || []));
+      setBestSellers(buildProductData(bestSellersRes.data || []));
+      setNewArrivals(buildProductData(newArrivalsRes.data || []));
 
       const { data: collectionsData } = await supabase
         .from('collections')

@@ -19,21 +19,15 @@ export default function WishlistPage() {
     try {
       const { data: productsData } = await supabase
         .from('products')
-        .select('*')
+        .select('*, product_images(*), product_variants(*)')
         .in('id', productIds)
         .eq('is_active', true);
 
       if (productsData && productsData.length > 0) {
-        const ids = productsData.map((p) => p.id);
-        const [imagesResult, variantsResult] = await Promise.all([
-          supabase.from('product_images').select('*').in('product_id', ids),
-          supabase.from('product_variants').select('*').in('product_id', ids),
-        ]);
-
         const productsWithDetails = productsData.map((product) => ({
           product,
-          images: imagesResult.data?.filter((img) => img.product_id === product.id) || [],
-          variants: variantsResult.data?.filter((v) => v.product_id === product.id) || [],
+          images: product.product_images || [],
+          variants: product.product_variants || [],
         }));
 
         setProducts(productsWithDetails);

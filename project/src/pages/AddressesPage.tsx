@@ -22,6 +22,7 @@ interface Address {
   landmark: string | null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const getErrorMessage = (error: any): string => {
   if (!error) return 'An unknown error occurred';
   if (error.message) {

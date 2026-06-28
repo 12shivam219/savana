@@ -39,6 +39,26 @@ test.describe('E-Commerce Storefront Journey', () => {
 
   test('should complete standard storefront purchase flow & decrement inventory', async ({ page }) => {
     // ----------------------------------------------------------------
+    // 0. Authenticate test-side supabase client and clear admin's cart
+    // to prevent accumulated items from previous tests from messing up expectations
+    // ----------------------------------------------------------------
+    const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+      email: ADMIN_EMAIL,
+      password: ADMIN_PASSWORD,
+    });
+    expect(authErr).toBeNull();
+    expect(authData.user).toBeTruthy();
+
+    const { data: adminCart } = await supabase
+      .from('carts')
+      .select('id')
+      .eq('user_id', authData.user!.id)
+      .maybeSingle();
+    if (adminCart) {
+      await supabase.from('cart_items').delete().eq('cart_id', adminCart.id);
+    }
+
+    // ----------------------------------------------------------------
     // 1. Sign in as admin user
     // ----------------------------------------------------------------
     await page.goto('/login');
@@ -48,14 +68,6 @@ test.describe('E-Commerce Storefront Journey', () => {
     await page.click('button[type="submit"]');
     await page.waitForURL('**/account', { timeout: 15000 });
     expect(page.url()).toContain('/account');
-
-    // Authenticate test-side supabase client to allow DB writes
-    const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
-      email: ADMIN_EMAIL,
-      password: ADMIN_PASSWORD,
-    });
-    expect(authErr).toBeNull();
-    expect(authData.user).toBeTruthy();
 
     // ----------------------------------------------------------------
     // 2. Reset target variant stock to a known value BEFORE page load
@@ -136,7 +148,7 @@ test.describe('E-Commerce Storefront Journey', () => {
     expect(orderFetchErr).toBeNull();
     expect(dbOrders!.length).toBeGreaterThan(0);
     const dbOrder = dbOrders![0];
-    expect(dbOrder.status).toBe('pending');
+    expect(dbOrder.status).toBe('PAID');
     expect(dbOrder.payment_status).toBe('completed');
 
     // Fetch the order items to find out which variant was actually purchased

@@ -1,8 +1,40 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Product, ProductVariant, ToastMessage, ThemeMode, ProductImage } from '../types';
-import { supabase } from '../lib/supabase';
+import { isInvalidRefreshTokenError, supabase } from '../lib/supabase';
 import { FREE_SHIPPING_THRESHOLD, DEFAULT_SHIPPING_RATE } from '../lib/utils';
+
+export function getCurrentTenantId(): string {
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem('current_tenant_id');
+    if (stored) return stored;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const queryTenant = urlParams.get('tenant_id');
+    if (queryTenant) {
+      localStorage.setItem('current_tenant_id', queryTenant);
+      return queryTenant;
+    }
+  }
+  return 'd9f8e7d6-c5b4-a3f2-e1d0-c9b8a7f6e5d4';
+}
+
+function createTenantBoundLocalStorage() {
+  return {
+    getItem: (name: string) => {
+      const tenantId = getCurrentTenantId();
+      return localStorage.getItem(`${name}:${tenantId}`);
+    },
+    setItem: (name: string, value: string) => {
+      const tenantId = getCurrentTenantId();
+      localStorage.setItem(`${name}:${tenantId}`, value);
+    },
+    removeItem: (name: string) => {
+      const tenantId = getCurrentTenantId();
+      localStorage.removeItem(`${name}:${tenantId}`);
+    }
+  };
+}
 
 interface CartItem {
   productId: string;
@@ -21,6 +53,7 @@ interface CartStore {
   removeItem: (variantId: string) => void;
   updateQuantity: (variantId: string, quantity: number) => void;
   clearCart: () => void;
+  clearLocalCart: () => void;
   getItemCount: () => number;
   getSubtotal: () => number;
   getTax: (rate?: number) => number;
@@ -28,6 +61,7 @@ interface CartStore {
   getTotal: () => number;
   getItem: (variantId: string) => CartItem | undefined;
   mergeCart: (userId: string) => Promise<void>;
+  pullCart: (userId: string) => Promise<void>;
 }
 
 let syncPromise = Promise.resolve();
@@ -68,6 +102,9 @@ const syncCartToDb = (items: CartItem[]) => {
       });
       if (syncError) throw syncError;
     } catch (err) {
+      if (isInvalidRefreshTokenError(err)) {
+        await supabase.auth.signOut();
+      }
       console.error('Error syncing cart to database:', err);
     }
   });
@@ -179,27 +216,40 @@ export const useCartStore = create<CartStore>()(
         syncCartToDb([]);
       },
 
+      clearLocalCart: () => {
+        set({ items: [] });
+      },
+
       getItemCount: () => {
         return get().items.reduce((total, item) => total + item.quantity, 0);
       },
 
       getSubtotal: () => {
-        return get().items.reduce((total, item) => {
-          const price = item.product.sale_price || item.product.base_price;
-          return total + price * item.quantity;
+        const subtotalPaise = get().items.reduce((total, item) => {
+          const pricePaise = Math.round((item.product.sale_price || item.product.base_price) * 100);
+          return total + (pricePaise * item.quantity);
         }, 0);
+        return subtotalPaise / 100;
       },
 
       getTax: (rate = 18) => {
-        return Math.round(get().getSubtotal() * (rate / 100));
+        const subtotalPaise = Math.round(get().getSubtotal() * 100);
+        const taxPaise = Math.round(subtotalPaise * (rate / 100));
+        return taxPaise / 100;
       },
 
       getShipping: (freeThreshold = FREE_SHIPPING_THRESHOLD, baseRate = DEFAULT_SHIPPING_RATE) => {
-        return get().getSubtotal() >= freeThreshold ? 0 : baseRate;
+        const subtotalPaise = Math.round(get().getSubtotal() * 100);
+        const thresholdPaise = Math.round(freeThreshold * 100);
+        const ratePaise = Math.round(baseRate * 100);
+        return subtotalPaise >= thresholdPaise ? 0 : ratePaise / 100;
       },
 
       getTotal: () => {
-        return get().getSubtotal() + get().getTax() + get().getShipping();
+        const subtotalPaise = Math.round(get().getSubtotal() * 100);
+        const taxPaise = Math.round(get().getTax() * 100);
+        const shippingPaise = Math.round(get().getShipping() * 100);
+        return (subtotalPaise + taxPaise + shippingPaise) / 100;
       },
 
       getItem: (variantId) => {
@@ -338,7 +388,94 @@ export const useCartStore = create<CartStore>()(
               }
               resolve();
             } catch (err) {
+              if (isInvalidRefreshTokenError(err)) {
+                await supabase.auth.signOut();
+              }
               console.error('Error merging cart:', err);
+              reject(err);
+            }
+          });
+        });
+      },
+
+      pullCart: async (userId) => {
+        return new Promise<void>((resolve, reject) => {
+          syncPromise = syncPromise.then(async () => {
+            try {
+              const { data: cart } = await supabase
+                .from('carts')
+                .select('id')
+                .eq('user_id', userId)
+                .maybeSingle();
+
+              if (!cart) {
+                set({ items: [] });
+                resolve();
+                return;
+              }
+
+              /*
+              interface RemoteCartItem {
+                quantity: number;
+                product_id: string;
+                variant_id: string;
+                product: Product | Product[];
+                variant: ProductVariant | ProductVariant[];
+              }
+              */
+
+              const { data: remoteItems } = await supabase
+                .from('cart_items')
+                .select(`
+                  quantity,
+                  product_id,
+                  variant_id,
+                  product:products(*),
+                  variant:product_variants(*)
+                `)
+                .eq('cart_id', cart.id);
+
+              const mappedItems: CartItem[] = [];
+              if (remoteItems && remoteItems.length > 0) {
+                const productIds = remoteItems.map(item => item.product_id);
+                const { data: imagesData } = await supabase
+                  .from('product_images')
+                  .select('*')
+                  .in('product_id', productIds);
+
+                const imagesMap = new Map<string, ProductImage[]>();
+                if (imagesData) {
+                  for (const img of imagesData) {
+                    const list = imagesMap.get(img.product_id) || [];
+                    list.push(img);
+                    imagesMap.set(img.product_id, list);
+                  }
+                }
+
+                for (const item of remoteItems) {
+                  const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
+                  const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
+                  if (productObj && variantObj) {
+                    const productImages = imagesMap.get(item.product_id) || [];
+                    mappedItems.push({
+                      productId: item.product_id,
+                      variantId: item.variant_id,
+                      product: {
+                        ...productObj,
+                        images: productImages,
+                      },
+                      variant: variantObj,
+                      quantity: item.quantity,
+                      images: productImages,
+                    });
+                  }
+                }
+              }
+
+              set({ items: mappedItems });
+              resolve();
+            } catch (err) {
+              console.error('Error pulling cart:', err);
               reject(err);
             }
           });
@@ -347,7 +484,7 @@ export const useCartStore = create<CartStore>()(
     }),
     {
       name: 'savana-cart',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => createTenantBoundLocalStorage()),
       partialize: (state) => ({
         items: state.items,
         sessionId: state.sessionId,
@@ -388,7 +525,7 @@ export const useWishlistStore = create<WishlistStore>()(
     }),
     {
       name: 'savana-wishlist',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => createTenantBoundLocalStorage()),
     }
   )
 );

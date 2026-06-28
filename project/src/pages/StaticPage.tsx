@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import DOMPurify from 'dompurify';
 import { supabase } from '../lib/supabase';
 import { Spinner } from '../components/ui';
 
@@ -68,7 +69,7 @@ export default function StaticPage({ slug: propSlug }: PageProps) {
         <h1 className="text-3xl font-display font-bold mb-8">{page.title}</h1>
         <div
           className="prose prose-neutral dark:prose-invert max-w-none"
-          dangerouslySetInnerHTML={{ __html: page.content }}
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(page.content) }}
         />
       </div>
     </div>

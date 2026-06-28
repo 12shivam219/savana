@@ -21,7 +21,10 @@ export type OrderStatus =
   | 'shipped'
   | 'delivered'
   | 'cancelled'
-  | 'returned';
+  | 'returned'
+  | 'PENDING_PAYMENT'
+  | 'PAID'
+  | 'FAILED_ABANDONED';
 
 export type PaymentMethod = 'upi' | 'card' | 'wallet' | 'netbanking' | 'cod' | 'giftcard';
 export type PaymentStatus = 'pending' | 'completed' | 'failed' | 'refunded';

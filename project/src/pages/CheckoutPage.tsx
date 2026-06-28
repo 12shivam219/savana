@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { CreditCard, Building2, Wallet, Truck, MapPin, Mail, Shield, RefreshCw } from 'lucide-react';
+import { CreditCard, Building2, Wallet, Truck, MapPin, Mail, Shield, RefreshCw, WifiOff } from 'lucide-react';
 import { Button, Input, Card } from '../components/ui';
 import { useCartStore, useToastStore } from '../stores';
 import { useAuth } from '../hooks/useAuth';
-import { supabase } from '../lib/supabase';
+import { isInvalidRefreshTokenError, supabase } from '../lib/supabase';
 import { formatPrice, generateOrderNumber } from '../lib/utils';
 import { cn } from '../lib/utils';
 import type { Coupon } from '../types';
 import { SafeProductImage } from '../components/product';
+import { Modal } from '../components/overlays';
 
 type PaymentMethod = 'upi' | 'card' | 'wallet' | 'netbanking' | 'cod';
 
@@ -25,7 +26,10 @@ export default function CheckoutPage() {
   const { user, refreshProfile } = useAuth();
   const { items, getSubtotal, getTax, getShipping, clearCart } = useCartStore();
   const { addToast } = useToastStore();
-  const [loading, setCheckoutLoading] = useState(false);
+  const [, setCheckoutLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [networkErrorBanner, setNetworkErrorBanner] = useState<string | null>(null);
+  const [idempotencyKey] = useState(() => self.crypto?.randomUUID() || Math.random().toString(36).substring(2) + Date.now().toString(36));
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('upi');
   const [useLoyaltyPoints, setUseLoyaltyPoints] = useState(false);
 
@@ -34,6 +38,12 @@ export default function CheckoutPage() {
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
   const [couponError, setCouponError] = useState('');
   const [couponLoading, setCouponLoading] = useState(false);
+
+  // Re-authentication states
+  const [showReauthModal, setShowReauthModal] = useState(false);
+  const [reauthPassword, setReauthPassword] = useState('');
+  const [reauthLoading, setReauthLoading] = useState(false);
+  const [reauthError, setReauthError] = useState('');
 
   const roundPrice = (val: number) => Math.round((val + Number.EPSILON) * 100) / 100;
 
@@ -56,25 +66,37 @@ export default function CheckoutPage() {
     }
   }, [subtotal, appliedCoupon, addToast]);
 
-  let rawDiscount = 0;
+  const subtotalPaise = Math.round(subtotal * 100);
+  const taxPaise = Math.round(tax * 100);
+  const shippingPaise = Math.round(shipping * 100);
+
+  let rawDiscountPaise = 0;
   if (appliedCoupon) {
     if (appliedCoupon.type === 'percentage') {
-      rawDiscount = subtotal * (Number(appliedCoupon.value) / 100);
+      rawDiscountPaise = Math.round((subtotalPaise * Number(appliedCoupon.value)) / 100);
       if (appliedCoupon.max_discount_amount) {
-        rawDiscount = Math.min(rawDiscount, Number(appliedCoupon.max_discount_amount));
+        const maxDiscountPaise = Math.round(Number(appliedCoupon.max_discount_amount) * 100);
+        rawDiscountPaise = Math.min(rawDiscountPaise, maxDiscountPaise);
       }
     } else if (appliedCoupon.type === 'fixed') {
-      rawDiscount = Math.min(Number(appliedCoupon.value), subtotal);
+      const fixedPaise = Math.round(Number(appliedCoupon.value) * 100);
+      rawDiscountPaise = Math.min(fixedPaise, subtotalPaise);
     }
   }
-  const discount = roundPrice(rawDiscount);
+  const discount = rawDiscountPaise / 100;
 
-  const orderTotalBeforePoints = roundPrice(Math.max(0, subtotal + tax + shipping - discount));
+  const orderTotalBeforePointsPaise = Math.max(0, subtotalPaise + taxPaise + shippingPaise - rawDiscountPaise);
+  const orderTotalBeforePoints = orderTotalBeforePointsPaise / 100;
+
   const maxPointsAvailable = user?.loyalty_points || 0;
   const maxPointsNeeded = Math.floor(orderTotalBeforePoints * 10);
   const redeemedPoints = useLoyaltyPoints ? Math.min(maxPointsAvailable, maxPointsNeeded) : 0;
-  const pointsDiscount = roundPrice(redeemedPoints * 0.1);
-  const total = roundPrice(Math.max(0, orderTotalBeforePoints - pointsDiscount));
+  
+  const pointsDiscountPaise = Math.round(redeemedPoints * 10); // 1 point = 10 paise
+  const pointsDiscount = pointsDiscountPaise / 100;
+
+  const totalPaise = Math.max(0, orderTotalBeforePointsPaise - pointsDiscountPaise);
+  const total = totalPaise / 100;
 
   const handleApplyCoupon = async () => {
     if (!couponCode.trim()) return;
@@ -151,9 +173,45 @@ export default function CheckoutPage() {
     }));
   };
 
+  const handleReauthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !reauthPassword) return;
+    setReauthLoading(true);
+    setReauthError('');
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: reauthPassword,
+      });
+
+      if (error) {
+        if (isInvalidRefreshTokenError(error)) {
+          await supabase.auth.signOut();
+        }
+        throw error;
+      }
+
+      setShowReauthModal(false);
+      setReauthPassword('');
+      addToast({
+        type: 'success',
+        title: 'Authenticated Successfully',
+        message: 'Your session has been restored. Please click Place Order again to complete your checkout.',
+      });
+    } catch (error) {
+      console.error('Re-authentication error:', error);
+      setReauthError(error instanceof Error ? error.message : 'Invalid password. Please try again.');
+    } finally {
+      setReauthLoading(false);
+    }
+  };
+
   const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
+    setNetworkErrorBanner(null);
     setCheckoutLoading(true);
+    setIsSubmitting(true);
 
     try {
       if (!user) {
@@ -164,6 +222,57 @@ export default function CheckoutPage() {
         navigate('/login');
         return;
       }
+
+      // Check connection before sending the request
+      if (!navigator.onLine) {
+        throw new TypeError('Failed to fetch');
+      }
+
+      // 1. Silent Token Refresh Check / Session Verification
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session) {
+        if (isInvalidRefreshTokenError(sessionError)) {
+          await supabase.auth.signOut();
+        }
+        setCheckoutLoading(false);
+        setIsSubmitting(false);
+        setShowReauthModal(true);
+        return;
+      }
+
+      // 2. Fetch fresh non-stale state from Zustand store right before constructing the payload
+      const freshStore = useCartStore.getState();
+      const freshItems = freshStore.items;
+      
+      const subtotalPaise = Math.round(freshStore.getSubtotal() * 100);
+      const taxPaise = Math.round(freshStore.getTax() * 100);
+      const shippingPaise = Math.round(freshStore.getShipping() * 100);
+
+      let couponDiscountPaise = 0;
+      if (appliedCoupon) {
+        if (appliedCoupon.type === 'percentage') {
+          couponDiscountPaise = Math.round((subtotalPaise * Number(appliedCoupon.value)) / 100);
+          if (appliedCoupon.max_discount_amount) {
+            const maxDiscountPaise = Math.round(Number(appliedCoupon.max_discount_amount) * 100);
+            couponDiscountPaise = Math.min(couponDiscountPaise, maxDiscountPaise);
+          }
+        } else if (appliedCoupon.type === 'fixed') {
+          const fixedPaise = Math.round(Number(appliedCoupon.value) * 100);
+          couponDiscountPaise = Math.min(fixedPaise, subtotalPaise);
+        }
+      }
+
+      const pointsDiscountPaise = Math.round(redeemedPoints * 10); // 1 point = 0.10 INR = 10 paise
+      const totalDiscountPaise = couponDiscountPaise + pointsDiscountPaise;
+
+      const orderTotalBeforePointsPaise = Math.max(0, subtotalPaise + taxPaise + shippingPaise - couponDiscountPaise);
+      const totalPaise = Math.max(0, orderTotalBeforePointsPaise - pointsDiscountPaise);
+
+      const freshSubtotal = subtotalPaise / 100;
+      const freshTax = taxPaise / 100;
+      const freshShipping = shippingPaise / 100;
+      const freshDiscount = totalDiscountPaise / 100;
+      const freshTotal = totalPaise / 100;
 
       const orderNumber = generateOrderNumber();
 
@@ -178,7 +287,7 @@ export default function CheckoutPage() {
         country: 'India',
       };
 
-      const orderItems = items.map((item) => {
+      const orderItems = freshItems.map((item) => {
         const price = roundPrice(item.product.sale_price || item.product.base_price);
         const primaryImage = item.images?.[0]?.url || item.product.images?.[0]?.url || '/placeholder.svg';
         return {
@@ -194,24 +303,55 @@ export default function CheckoutPage() {
         };
       });
 
-      const { data: orderId, error: checkoutError } = await supabase.rpc('place_order', {
+      // Wrap RPC in a race with a 15-second strict timeout limit
+      const rpcCall = supabase.rpc('place_order', {
         p_order_number: orderNumber,
-        p_subtotal: subtotal,
-        p_tax_amount: tax,
-        p_shipping_amount: shipping,
-        p_discount_amount: roundPrice(discount + pointsDiscount),
-        p_total: total,
+        p_subtotal: freshSubtotal,
+        p_tax_amount: freshTax,
+        p_shipping_amount: freshShipping,
+        p_discount_amount: freshDiscount,
+        p_total: freshTotal,
         p_billing_address: shippingAddress,
         p_shipping_address: shippingAddress,
         p_payment_method: paymentMethod,
-        p_payment_status: paymentMethod === 'cod' ? 'pending' : 'completed',
+        p_payment_status: 'pending', // Online payment always starts as pending to capture via webhook
         p_items: orderItems,
         p_redeemed_points: redeemedPoints,
         p_coupon_code: appliedCoupon?.code || null,
+        p_idempotency_key: idempotencyKey,
       });
+
+      // Pass the idempotency key in the headers of the REST request
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (rpcCall as any).headers.set('idempotency-key', idempotencyKey);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (rpcCall as any).headers.set('x-idempotency-key', idempotencyKey);
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new TypeError('Failed to fetch')), 15000)
+      );
+
+      const { data: orderId, error: checkoutError } = await Promise.race([
+        rpcCall,
+        timeoutPromise
+      ]);
 
       if (checkoutError) throw checkoutError;
       if (!orderId) throw new Error('Failed to place order');
+
+      // For online payments (prepaid), trigger simulated Stripe webhook immediately
+      if (paymentMethod !== 'cod') {
+        try {
+          await supabase.functions.invoke('payment-webhook', {
+            body: { order_number: orderNumber },
+            headers: {
+              'x-mock-payment': 'true',
+            }
+          });
+        } catch (err) {
+          console.error('Background simulated webhook execution failed:', err);
+        }
+      }
 
       // Refresh loyalty points balance on profile state
       await refreshProfile();
@@ -226,10 +366,17 @@ export default function CheckoutPage() {
       navigate('/orders');
     } catch (error) {
       console.error('Checkout error:', error);
+      const isNetworkError = error instanceof TypeError && error.message === 'Failed to fetch';
+      
+      if (isNetworkError) {
+        setNetworkErrorBanner("Network connection lost. No payment was taken. Please check your connection and try again.");
+        return;
+      }
+
       const errMsg = error instanceof Error 
         ? error.message 
         : (error && typeof error === 'object' && 'message' in error 
-            ? String(error.message) 
+            ? String((error as { message?: unknown }).message) 
             : 'Please try again');
       addToast({
         type: 'error',
@@ -238,6 +385,7 @@ export default function CheckoutPage() {
       });
     } finally {
       setCheckoutLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -255,6 +403,23 @@ export default function CheckoutPage() {
   return (
     <div className="container-app py-8">
       <h1 className="text-2xl font-display font-bold mb-8">Checkout</h1>
+
+      {networkErrorBanner && (
+        <div className="mb-6 p-4 bg-error-50 dark:bg-error-900/10 border border-error-200 dark:border-error-800 rounded-lg text-error-800 dark:text-error-300 text-sm flex items-start gap-3 shadow-sm">
+          <WifiOff className="w-5 h-5 text-error-600 dark:text-error-400 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-semibold text-error-900 dark:text-error-200">Connection Failed</h3>
+            <p className="mt-0.5">{networkErrorBanner}</p>
+          </div>
+          <button 
+            type="button" 
+            onClick={() => setNetworkErrorBanner(null)} 
+            className="text-error-500 hover:text-error-700 dark:text-error-400 dark:hover:text-error-200 font-bold px-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <form onSubmit={handleCheckout}>
         <div className="grid lg:grid-cols-3 gap-8">
@@ -525,7 +690,8 @@ export default function CheckoutPage() {
                 variant="primary"
                 size="lg"
                 className="w-full"
-                isLoading={loading}
+                isLoading={isSubmitting}
+                disabled={isSubmitting}
               >
                 Place Order
               </Button>
@@ -548,6 +714,62 @@ export default function CheckoutPage() {
           </div>
         </div>
       </form>
+
+      {/* Re-authentication Modal to prevent checkout loss on token expiry */}
+      <Modal
+        isOpen={showReauthModal}
+        onClose={() => setShowReauthModal(false)}
+        title="Session Expired"
+        size="sm"
+      >
+        <form onSubmit={handleReauthSubmit} className="space-y-4">
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+            Your secure checkout session has expired. Please enter your password to authenticate and complete your purchase without losing your cart.
+          </p>
+          <div>
+            <label className="block text-xs font-medium mb-1 text-neutral-500">Email Address</label>
+            <input
+              type="email"
+              value={user?.email || ''}
+              disabled
+              className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-700 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-500 text-sm cursor-not-allowed"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1">Password</label>
+            <input
+              type="password"
+              required
+              value={reauthPassword}
+              onChange={(e) => setReauthPassword(e.target.value)}
+              placeholder="Enter your password"
+              className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-700 rounded bg-transparent text-sm font-sans"
+            />
+          </div>
+          {reauthError && (
+            <p className="text-xs text-error-600 dark:text-error-400 font-medium">
+              {reauthError}
+            </p>
+          )}
+          <div className="flex gap-3 justify-end pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowReauthModal(false)}
+              disabled={reauthLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              isLoading={reauthLoading}
+            >
+              Sign In
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

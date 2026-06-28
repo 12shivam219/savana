@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils';
 import type { Order, Address } from '../../types';
 
 interface OrderNotes {
-  events: any[];
+  events: unknown[];
   carrier?: string;
   tracking_number?: string;
   return_reason?: string;
@@ -31,13 +31,25 @@ const parseOrderNotes = (notes: string | null | undefined): OrderNotes => {
         admin_notes: parsed.admin_notes
       };
     }
-  } catch (e) {
+  } catch {
     return { events: [], admin_notes: notes };
   }
   return { events: [] };
 };
 
-const statusFilters = ['all', 'pending', 'processing', 'shipped', 'delivered', 'cancelled'] as const;
+const statusFilters = ['all', 'PENDING_PAYMENT', 'PAID', 'pending', 'processing', 'shipped', 'delivered', 'cancelled', 'FAILED_ABANDONED'] as const;
+
+const statusLabels: Record<typeof statusFilters[number], string> = {
+  all: 'All',
+  PENDING_PAYMENT: 'Pending Payment',
+  PAID: 'Paid',
+  pending: 'Pending Fulfillment',
+  processing: 'Unshipped',
+  shipped: 'Shipped',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+  FAILED_ABANDONED: 'Abandoned',
+};
 
 export default function AdminOrders() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -195,6 +207,15 @@ export default function AdminOrders() {
     if (meta.return_status === 'requested') {
       return 'Return Requested';
     }
+    if (order.status === 'PENDING_PAYMENT') {
+      return 'Pending Payment';
+    }
+    if (order.status === 'PAID') {
+      return 'Paid & Confirmed';
+    }
+    if (order.status === 'FAILED_ABANDONED') {
+      return 'Failed & Abandoned';
+    }
     if (order.status === 'pending') {
       return 'Pending Fulfillment';
     }
@@ -207,13 +228,22 @@ export default function AdminOrders() {
       }
       return 'Returned';
     }
-    return order.status.charAt(0).toUpperCase() + order.status.slice(1);
+    return order.status.charAt(0).toUpperCase() + order.status.slice(1).toLowerCase();
   }
 
   function getStatusColorClass(status: string, notes?: string | null) {
     const meta = parseOrderNotes(notes);
     if (meta.return_status === 'requested') {
       return 'bg-warning-100 text-warning-700';
+    }
+    if (status === 'PENDING_PAYMENT') {
+      return 'bg-warning-100 text-warning-700';
+    }
+    if (status === 'PAID') {
+      return 'bg-success-100 text-success-700';
+    }
+    if (status === 'FAILED_ABANDONED') {
+      return 'bg-error-100 text-error-700';
     }
     if (status === 'pending' || status === 'processing') {
       return 'bg-warning-100 text-warning-700';
@@ -263,7 +293,7 @@ export default function AdminOrders() {
                   : 'bg-white dark:bg-neutral-900 text-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-800 border border-neutral-300 dark:border-neutral-700'
               )}
             >
-              {status.charAt(0).toUpperCase() + status.slice(1)}
+              {statusLabels[status]}
             </button>
           ))}
         </div>
@@ -322,7 +352,7 @@ export default function AdminOrders() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
-                          {order.status === 'pending' && (
+                           {(order.status === 'pending' || order.status === 'PAID') && (
                             <button
                               onClick={() => updateOrderStatus(order.id, 'processing')}
                               className="p-2 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg text-warning-600"
@@ -371,7 +401,7 @@ export default function AdminOrders() {
                              }
                              return null;
                            })()}
-                          {order.status !== 'cancelled' && order.status !== 'delivered' && order.status !== 'returned' && (
+                           {order.status !== 'cancelled' && order.status !== 'delivered' && order.status !== 'returned' && order.status !== 'FAILED_ABANDONED' && (
                             <button
                               onClick={() => updateOrderStatus(order.id, 'cancelled')}
                               className="p-2 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg text-error-500"

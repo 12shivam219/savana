@@ -44,25 +44,19 @@ export default function SearchPage() {
   async function searchProducts(searchQuery: string) {
     try {
       const decodedQuery = safeDecodeURIComponent(searchQuery);
-      const { data: productsData } = await supabase
-        .from('products')
-        .select('*')
+      const { data: productsData } = await (supabase
+        .rpc('search_products', { p_query: decodedQuery })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .select('*, product_images(*), product_variants(*)') as any)
         .eq('is_active', true)
-        .ilike('name', `%${decodedQuery}%`)
         .limit(20);
 
       if (productsData && productsData.length > 0) {
-        const productIds = productsData.map((p) => p.id);
-
-        const [imagesResult, variantsResult] = await Promise.all([
-          supabase.from('product_images').select('*').in('product_id', productIds),
-          supabase.from('product_variants').select('*').in('product_id', productIds),
-        ]);
-
-        const productsWithDetails = productsData.map((product) => ({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const productsWithDetails = productsData.map((product: any) => ({
           product,
-          images: imagesResult.data?.filter((img) => img.product_id === product.id) || [],
-          variants: variantsResult.data?.filter((v) => v.product_id === product.id) || [],
+          images: product.product_images || [],
+          variants: product.product_variants || [],
         }));
 
         setProducts(productsWithDetails);

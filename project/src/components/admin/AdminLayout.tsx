@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, Link } from 'react-router-dom';
 import {
   LayoutDashboard,
   Package,
@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   X,
+  ArrowUpRight,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
@@ -77,7 +78,13 @@ export function AdminLayout() {
         <div className="flex flex-col h-full">
           <div className="p-6 border-b border-neutral-200 dark:border-neutral-800">
             <h1 className="text-xl font-bold text-primary-600">SAVANA Admin</h1>
-            <p className="text-sm text-neutral-500 mt-1">Management Console</p>
+            <p className="text-sm text-neutral-500 mt-1 mb-2">Management Console</p>
+            <Link
+              to="/"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 transition-colors"
+            >
+              Go to Store <ArrowUpRight className="w-3.5 h-3.5" />
+            </Link>
           </div>
 
           <nav className="flex-1 p-4 space-y-1 overflow-y-auto">

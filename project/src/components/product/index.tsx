@@ -62,7 +62,7 @@ export function ProductCard({ product, images, variants, className }: ProductCar
   const primaryImage = images.find((img) => img.is_primary) || images[0];
   const isWishlisted = isInWishlist(product.id);
   const firstVariant = variants[0];
-  const hasDiscount = product.sale_price && product.sale_price < product.base_price;
+  const hasDiscount = product.sale_price !== null && product.sale_price !== undefined && Number(product.sale_price) < Number(product.base_price);
   
   // Calculate total inventory across all variants
   const totalStock = variants.reduce((sum, v) => sum + v.inventory_quantity, 0);

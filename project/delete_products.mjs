@@ -69,27 +69,33 @@ async function deleteAllProducts() {
   console.log(`\nFound ${products.length} products to delete:`);
   products.forEach(p => console.log(`  - ${p.name}`));
 
-  // 5. Delete each product by ID (RLS admin policy applies per-row)
+  // 5. Soft Delete each product by ID (RLS admin policy applies per-row)
   let deleted = 0;
   for (const product of products) {
     const { error: delErr } = await supabase
       .from('products')
-      .delete()
+      .update({
+        is_active: false,
+        deleted_at: new Date().toISOString()
+      })
       .eq('id', product.id);
-
+ 
     if (delErr) {
-      console.error(`  ✗ Failed to delete "${product.name}": ${delErr.message}`);
+      console.error(`  ✗ Failed to soft delete "${product.name}": ${delErr.message}`);
     } else {
-      console.log(`  ✓ Deleted: ${product.name}`);
+      console.log(`  ✓ Soft Deleted: ${product.name}`);
       deleted++;
     }
   }
-
-  console.log(`\nDone. Deleted ${deleted}/${products.length} products.`);
-
+ 
+  console.log(`\nDone. Soft Deleted ${deleted}/${products.length} products.`);
+ 
   // 6. Verify
-  const { data: remaining } = await supabase.from('products').select('id');
-  console.log(`Remaining products in DB: ${remaining?.length ?? 'unknown'}`);
+  const { data: activeProducts } = await supabase
+    .from('products')
+    .select('id')
+    .is('deleted_at', null);
+  console.log(`Remaining active (non-soft-deleted) products in DB: ${activeProducts?.length ?? 'unknown'}`);
 }
 
 deleteAllProducts();

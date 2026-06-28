@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { isInvalidRefreshTokenError, supabase } from '../lib/supabase';
 import type { User } from '../types';
 import { useCartStore } from '../stores';
 
@@ -11,6 +11,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
+  updatePassword: (password: string) => Promise<{ error: Error | null }>;
   updateProfile: (updates: Partial<User>) => Promise<{ error: Error | null }>;
   refreshProfile: () => Promise<void>;
 }
@@ -28,6 +29,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        window.location.href = '/reset-password';
+        return;
+      }
       if (session?.user) {
         if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
           // Offload fetchProfile to a setTimeout to prevent blocking/deadlock in the Supabase client
@@ -62,6 +67,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!user) return;
+
+    // Set up real-time channel subscription for cart_items
+    const channel = supabase
+      .channel(`public:cart_items:user_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'cart_items'
+        },
+        async () => {
+          // Pull latest cart from DB to sync Zustand state
+          await useCartStore.getState().pullCart(user.id);
+        }
+      )
+      .subscribe();
+
+    // Aggressively validate/pull cart cache when tab/window regains focus
+    const handleFocus = () => {
+      useCartStore.getState().pullCart(user.id);
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      channel.unsubscribe();
+      supabase.removeChannel(channel);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [user]);
+
   async function fetchProfile(userId: string) {
     try {
       const { data, error } = await supabase
@@ -74,6 +112,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(data as User);
     } catch (error) {
       console.error('Error fetching profile:', error);
+      if (isInvalidRefreshTokenError(error)) {
+        await supabase.auth.signOut();
+      }
       setUser(null);
       setIsLoading(false);
     } finally {
@@ -116,13 +157,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    useCartStore.getState().clearLocalCart();
     await supabase.auth.signOut();
     setUser(null);
   }
 
   async function resetPassword(email: string) {
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) throw error;
+      return { error: null };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  }
+
+  async function updatePassword(password: string) {
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
       return { error: null };
     } catch (error) {
@@ -166,6 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signIn,
         signOut,
         resetPassword,
+        updatePassword,
         updateProfile,
         refreshProfile,
       }}

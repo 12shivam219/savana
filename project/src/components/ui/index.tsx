@@ -431,7 +431,7 @@ export function PriceTag({
     lg: 'text-xl font-bold',
   };
 
-  const hasDiscount = salePrice && salePrice < price;
+  const hasDiscount = salePrice !== null && salePrice !== undefined && Number(salePrice) < Number(price);
   const discountPercent = hasDiscount
     ? Math.round(((price - salePrice!) / price) * 100)
     : 0;

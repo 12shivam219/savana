@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import {
   Search,
   ShoppingBag,
@@ -11,6 +11,7 @@ import {
   Moon,
   ChevronDown,
   MapPin,
+  Shield,
 } from 'lucide-react';
 import { cn, FREE_SHIPPING_THRESHOLD } from '../../lib/utils';
 import { Button } from '../ui';
@@ -155,6 +156,16 @@ export function Header() {
                 )}
               </button>
 
+              {user?.role === 'admin' && (
+                <Link
+                  to="/admin"
+                  className="hidden sm:flex items-center gap-2 rounded-full border border-primary-600/20 bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100 dark:bg-primary-950/40 dark:text-primary-300 dark:hover:bg-primary-900/60"
+                >
+                  <Shield className="w-4 h-4" />
+                  Admin
+                </Link>
+              )}
+
               {user ? (
                 <Link
                   to="/account"
@@ -211,6 +222,16 @@ export function Header() {
                   Wishlist ({wishlistCount})
                 </Link>
               </div>
+
+              {user?.role === 'admin' && (
+                <Link
+                  to="/admin"
+                  className="flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 dark:bg-primary-950/40 dark:text-primary-300"
+                >
+                  <Shield className="w-4 h-4" />
+                  Admin Panel
+                </Link>
+              )}
             </nav>
           </div>
         )}
@@ -385,12 +406,12 @@ export function Footer() {
   );
 }
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export function Layout({ children }: { children?: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
       <SearchOverlay />
-      <main className="flex-1">{children}</main>
+      <main className="flex-1">{children || <Outlet />}</main>
       <Footer />
     </div>
   );

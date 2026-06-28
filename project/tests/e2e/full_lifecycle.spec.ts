@@ -26,6 +26,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const adminSupabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Existing admin account — used for DB writes that require admin RLS
 const ADMIN_EMAIL = '12shivamtiwari219@gmail.com';
@@ -45,9 +46,9 @@ test.describe('Savana Full Lifecycle E2E Suite', () => {
   test('should execute complete storefront, checkout, admin management, and return cycles', async ({ page }) => {
     test.setTimeout(180000);
     // ----------------------------------------------------------------
-    // Authenticate test-side supabase client as ADMIN for all DB writes
+    // Authenticate test-side adminSupabase client as ADMIN for all DB writes
     // ----------------------------------------------------------------
-    const { error: adminSignInErr } = await supabase.auth.signInWithPassword({
+    const { error: adminSignInErr } = await adminSupabase.auth.signInWithPassword({
       email: ADMIN_EMAIL,
       password: ADMIN_PASSWORD,
     });
@@ -101,7 +102,7 @@ test.describe('Savana Full Lifecycle E2E Suite', () => {
     });
     expect(userSignInErr).toBeNull();
 
-    const { error: profileRoleError } = await supabase
+    const { error: profileRoleError } = await adminSupabase
       .from('profiles')
       .update({ role: 'admin' })
       .eq('id', testUserId);
@@ -146,7 +147,7 @@ test.describe('Savana Full Lifecycle E2E Suite', () => {
     // Ensure enough stock for qty=2 purchase
     const initialStock = 50;
     // Reset stock of all variants to initialStock to ensure any default selected size/color has enough stock
-    const { error: stockResetErr } = await supabase
+    const { error: stockResetErr } = await adminSupabase
       .from('product_variants')
       .update({ inventory_quantity: initialStock, is_in_stock: true })
       .eq('product_id', dbProduct!.id);

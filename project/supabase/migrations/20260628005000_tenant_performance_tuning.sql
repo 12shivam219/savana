@@ -1,0 +1,24 @@
+-- Create B-Tree indexes on tenant_id for all multi-tenant tables to optimize index lookup performance and prevent full table scans
+CREATE INDEX IF NOT EXISTS idx_profiles_tenant_id ON public.profiles(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_addresses_tenant_id ON public.addresses(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_categories_tenant_id ON public.categories(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_collections_tenant_id ON public.collections(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_images_tenant_id ON public.product_images(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_variants_tenant_id ON public.product_variants(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_products_tenant_id ON public.products(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_carts_tenant_id ON public.carts(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cart_items_tenant_id ON public.cart_items(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_orders_tenant_id ON public.orders(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_tenant_id ON public.order_items(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_tenant_id ON public.reviews(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_wishlists_tenant_id ON public.wishlists(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_coupons_tenant_id ON public.coupons(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_tenant_id ON public.loyalty_transactions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_tenant_id ON public.notifications(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_contact_submissions_tenant_id ON public.contact_submissions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_faqs_tenant_id ON public.faqs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_pages_tenant_id ON public.pages(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_banners_tenant_id ON public.banners(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_site_settings_tenant_id ON public.site_settings(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_user_roles_tenant_id ON public.user_roles(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_order_adjustments_tenant_id ON public.order_adjustments(tenant_id);

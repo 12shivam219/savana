@@ -31,7 +31,8 @@ export default function AdminProducts() {
       setLoading(true);
       let query = supabase
         .from('products')
-        .select('*')
+        .select('*, product_images(*), product_variants(*)')
+        .is('deleted_at', null)
         .order('created_at', { ascending: false });
 
       if (searchQuery) {
@@ -41,17 +42,10 @@ export default function AdminProducts() {
       const { data: productsData } = await query;
 
       if (productsData && productsData.length > 0) {
-        const productIds = productsData.map((p) => p.id);
-
-        const [imagesResult, variantsResult] = await Promise.all([
-          supabase.from('product_images').select('*').in('product_id', productIds),
-          supabase.from('product_variants').select('*').in('product_id', productIds),
-        ]);
-
         const productsWithDetails = productsData.map((product) => ({
           product,
-          images: imagesResult.data?.filter((img) => img.product_id === product.id) || [],
-          variants: variantsResult.data?.filter((v) => v.product_id === product.id) || [],
+          images: product.product_images || [],
+          variants: product.product_variants || [],
         }));
 
         setProducts(productsWithDetails);

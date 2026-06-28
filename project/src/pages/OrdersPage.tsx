@@ -37,6 +37,41 @@ interface Order {
   tracking_number?: string;
 }
 
+interface OrderNotes {
+  events?: unknown[];
+  carrier?: string;
+  tracking_number?: string;
+  return_reason?: string;
+  return_status?: string;
+  admin_notes?: string;
+}
+
+const parseOrderNotes = (notes?: string | null): OrderNotes => {
+  if (!notes) return {};
+
+  try {
+    const parsed = JSON.parse(notes);
+    if (Array.isArray(parsed)) {
+      return { events: parsed };
+    }
+
+    if (parsed && typeof parsed === 'object') {
+      return {
+        events: Array.isArray((parsed as Record<string, unknown>).events) ? ((parsed as Record<string, unknown>).events as unknown[]) : undefined,
+        carrier: (parsed as Record<string, unknown>).carrier as string | undefined,
+        tracking_number: (parsed as Record<string, unknown>).tracking_number as string | undefined,
+        return_reason: (parsed as Record<string, unknown>).return_reason as string | undefined,
+        return_status: (parsed as Record<string, unknown>).return_status as string | undefined,
+        admin_notes: (parsed as Record<string, unknown>).admin_notes as string | undefined,
+      };
+    }
+  } catch {
+    return { admin_notes: notes };
+  }
+
+  return {};
+};
+
 const statusColors: Record<string, string> = {
   pending: 'bg-warning-100 text-warning-700',
   confirmed: 'bg-primary-100 text-primary-700',
@@ -45,6 +80,9 @@ const statusColors: Record<string, string> = {
   delivered: 'bg-success-100 text-success-700',
   cancelled: 'bg-error-100 text-error-700',
   returned: 'bg-neutral-100 text-neutral-700',
+  PENDING_PAYMENT: 'bg-warning-100 text-warning-700',
+  PAID: 'bg-success-100 text-success-700',
+  FAILED_ABANDONED: 'bg-error-100 text-error-700',
 };
 
 function getStatusTextAndColor(status: string, notes?: string | null) {
@@ -58,6 +96,15 @@ function getStatusTextAndColor(status: string, notes?: string | null) {
     }
   } catch { /* ignore */ }
 
+  if (status === 'PENDING_PAYMENT') {
+    return { text: 'Pending Payment', colorClass: 'bg-warning-100 text-warning-700' };
+  }
+  if (status === 'PAID') {
+    return { text: 'Paid & Confirmed', colorClass: 'bg-success-100 text-success-700' };
+  }
+  if (status === 'FAILED_ABANDONED') {
+    return { text: 'Failed & Abandoned', colorClass: 'bg-error-100 text-error-700' };
+  }
   if (status === 'pending') {
     return { text: 'Pending Fulfillment', colorClass: 'bg-warning-100 text-warning-700' };
   }
@@ -74,7 +121,7 @@ function getStatusTextAndColor(status: string, notes?: string | null) {
     cancelled: 'Cancelled',
   };
   return {
-    text: labels[status] || status.charAt(0).toUpperCase() + status.slice(1),
+    text: labels[status] || (status ? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase() : ''),
     colorClass: statusColors[status] || 'bg-neutral-100 text-neutral-700',
   };
 }
@@ -85,11 +132,45 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const { addToast } = useToastStore();
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
+  const [simulatingWebhookId, setSimulatingWebhookId] = useState<string | null>(null);
 
   // Expanded details state
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [itemsByOrder, setItemsByOrder] = useState<Record<string, OrderItem[]>>({});
   const [loadingItems, setLoadingItems] = useState(false);
+
+  const handleSimulateWebhook = async (orderNumber: string) => {
+    try {
+      setSimulatingWebhookId(orderNumber);
+      const { error } = await supabase.functions.invoke('payment-webhook', {
+        body: { order_number: orderNumber },
+        headers: {
+          'x-mock-payment': 'true',
+        }
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      addToast({
+        type: 'success',
+        title: 'Webhook Delivered',
+        message: `Order #${orderNumber} successfully marked as PAID.`,
+      });
+
+      loadOrders();
+    } catch (error) {
+      console.error('Error simulating webhook:', error);
+      addToast({
+        type: 'error',
+        title: 'Simulation Failed',
+        message: 'Could not deliver the payment success webhook.',
+      });
+    } finally {
+      setSimulatingWebhookId(null);
+    }
+  };
 
   const handleCancelOrder = async (orderId: string) => {
     try {
@@ -125,7 +206,7 @@ export default function OrdersPage() {
       setProcessingOrderId(orderId);
 
       const order = orders.find(o => o.id === orderId);
-      let currentNotes: any = {};
+      let currentNotes: Record<string, unknown> = {};
       try {
         if (order?.notes) {
           const parsed = JSON.parse(order.notes);
@@ -304,7 +385,7 @@ export default function OrdersPage() {
 
             {/* Visual Tracking Timeline */}
             {(() => {
-              let isReturnOrCancelled = order.status === 'cancelled' || order.status === 'returned';
+              let isReturnOrCancelled = order.status === 'cancelled' || order.status === 'returned' || order.status === 'PENDING_PAYMENT' || order.status === 'FAILED_ABANDONED';
               try {
                 const meta = JSON.parse(order.notes || '{}');
                 if (meta.return_status === 'requested' || meta.return_status === 'returned_restocked') {
@@ -322,7 +403,7 @@ export default function OrdersPage() {
                       className="absolute left-0 top-4 -translate-y-1/2 h-1 bg-primary-600 transition-all duration-500 z-0" 
                       style={{ 
                         width: `${
-                          order.status === 'pending' ? '0%' :
+                          (order.status === 'pending' || order.status === 'PAID') ? '0%' :
                           order.status === 'processing' ? '33.33%' :
                           order.status === 'shipped' ? '66.66%' :
                           order.status === 'delivered' ? '100%' : '0%'
@@ -338,8 +419,9 @@ export default function OrdersPage() {
                         delivered: 'Delivered',
                       };
                       
-                      const orderStatuses = ['pending', 'processing', 'shipped', 'delivered'];
-                      const currentIdx = orderStatuses.indexOf(order.status);
+                      const orderStatuses = ['pending_dummy', 'processing', 'shipped', 'delivered'];
+                      const mappedStatus = (order.status === 'pending' || order.status === 'PAID') ? 'pending_dummy' : order.status;
+                      const currentIdx = orderStatuses.indexOf(mappedStatus);
                       const isCompleted = orderStatuses.indexOf(step) <= currentIdx;
                       
                       return (
@@ -369,21 +451,11 @@ export default function OrdersPage() {
                   <span className="text-neutral-500">Carrier:</span>{' '}
                   <span className="font-semibold text-neutral-800 dark:text-neutral-200 capitalize" id={`carrier-name-${order.order_number}`}>
                     {(() => {
-                      try {
-                        const parsed = JSON.parse(order.notes || '{}');
-                        if (Array.isArray(parsed)) {
-                          const shipStep = parsed.find((t: any) => t.status === 'shipped');
-                          return shipStep?.carrier || 'Carrier';
-                        } else if (parsed && typeof parsed === 'object') {
-                          if (parsed.carrier) return parsed.carrier;
-                          const events = Array.isArray(parsed.events) ? parsed.events : [];
-                          const shipStep = events.find((t: any) => t.status === 'shipped');
-                          return shipStep?.carrier || 'Carrier';
-                        }
-                        return 'Carrier';
-                      } catch {
-                        return 'Carrier';
-                      }
+                      const notes = parseOrderNotes(order.notes);
+                      const events = Array.isArray(notes.events) ? notes.events : [];
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      const shipStep = events.find((t: any) => t?.status === 'shipped') as { carrier?: string } | undefined;
+                      return shipStep?.carrier || notes.carrier || 'Carrier';
                     })()}
                   </span>
                 </div>
@@ -407,6 +479,19 @@ export default function OrdersPage() {
                 <p className="text-lg font-semibold">{formatPrice(order.total)}</p>
               </div>
               <div className="flex gap-2">
+                {order.status === 'PENDING_PAYMENT' && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="bg-success-600 hover:bg-success-700 text-white font-medium shadow-sm"
+                    onClick={() => handleSimulateWebhook(order.order_number)}
+                    isLoading={simulatingWebhookId === order.order_number}
+                    disabled={processingOrderId !== null || simulatingWebhookId !== null}
+                    id={`simulate-btn-${order.order_number}`}
+                  >
+                    Simulate Payment Webhook
+                  </Button>
+                )}
                 {(order.status === 'pending' || order.status === 'processing' || order.status === 'confirmed') && (
                   <Button
                     variant="outline"

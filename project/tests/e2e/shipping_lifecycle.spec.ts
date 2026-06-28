@@ -27,6 +27,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const adminSupabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Existing admin account
 const ADMIN_EMAIL = '12shivamtiwari219@gmail.com';
@@ -45,8 +46,8 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
 
   test('should execute complete shipping, customer tracking, RMA, and inventory replenishment lifecycle', async ({ page }) => {
     test.setTimeout(180000);
-    // Authenticate test-side supabase client as ADMIN for database overrides
-    const { error: adminSignInErr } = await supabase.auth.signInWithPassword({
+    // Authenticate test-side adminSupabase client as ADMIN for database overrides
+    const { error: adminSignInErr } = await adminSupabase.auth.signInWithPassword({
       email: ADMIN_EMAIL,
       password: ADMIN_PASSWORD,
     });
@@ -92,7 +93,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     });
     expect(userSignInErr).toBeNull();
 
-    const { data: updateRes, error: profileRoleError } = await supabase
+    const { data: updateRes, error: profileRoleError } = await adminSupabase
       .from('profiles')
       .update({ role: 'admin' })
       .eq('id', testUserId)
@@ -121,7 +122,7 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     const startingInventory = 100;
 
     // Reset stock of all variants to startingInventory to ensure any default selected size/color has enough stock
-    const { error: stockResetErr } = await supabase
+    const { error: stockResetErr } = await adminSupabase
       .from('product_variants')
       .update({ inventory_quantity: startingInventory, is_in_stock: true })
       .eq('product_id', dbProduct!.id);
@@ -166,14 +167,14 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     
     expect(fetchOrderError).toBeNull();
     expect(dbOrder).toBeTruthy();
-    expect(dbOrder!.status).toBe('pending');
+    expect(dbOrder!.status).toBe('PAID');
     expect((dbOrder!.shipping_address as { address_line1: string }).address_line1).toBe('456 Logistics Park Rd');
 
     const orderNumber = dbOrder!.order_number;
 
-    // Verify UI displays "Pending Fulfillment"
+    // Verify UI displays "Paid & Confirmed"
     const orderCard = page.locator(`.container-app .space-y-4 > div:has-text("${orderNumber}")`).first();
-    await expect(orderCard.locator(`#status-badge-${orderNumber}`)).toHaveText('Pending Fulfillment');
+    await expect(orderCard.locator(`#status-badge-${orderNumber}`)).toHaveText('Paid & Confirmed');
 
     // Query order_items to find which variant was actually purchased in the browser
     const { data: orderItem, error: fetchItemError } = await supabase
@@ -209,12 +210,9 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     expect(adminReSignInErr).toBeNull();
     // Log out test user
     await page.goto('/account');
-    const signOutBtn = page.locator('button:has-text("Sign Out")');
-    if (await signOutBtn.isVisible()) {
-      await signOutBtn.click();
-      await page.waitForURL('**/login');
-      await page.waitForTimeout(1000);
-    }
+    await page.click('button:has-text("Sign Out")');
+    await page.waitForURL('**/login');
+    await page.waitForTimeout(1000);
 
     // Log in as Admin
     await expect(page.locator('input[type="email"]').first()).toBeVisible({ timeout: 10000 });
@@ -282,11 +280,9 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     console.log('--- Phase 3: Switch back to Customer Portal ---');
     // Log out admin
     await page.goto('/account');
-    if (await signOutBtn.isVisible()) {
-      await signOutBtn.click();
-      await page.waitForURL('**/login');
-      await page.waitForTimeout(1000);
-    }
+    await page.click('button:has-text("Sign Out")');
+    await page.waitForURL('**/login');
+    await page.waitForTimeout(1000);
 
     // Log back in as customer
     await page.locator('input[type="email"]').first().fill(testEmail);
@@ -311,11 +307,13 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
 
     console.log('--- Phase 3: Simulate Webhook Delivery update ---');
     // Simulate real-time tracking webhook or cron delivery update
-    let currentEvents = [];
-    let deliveryParsedNotes = {};
+    let currentEvents: unknown[] = [];
+    let deliveryParsedNotes: unknown = {};
     try {
       deliveryParsedNotes = JSON.parse(dbOrderShipped!.notes || '{}');
-      currentEvents = Array.isArray(deliveryParsedNotes) ? deliveryParsedNotes : ((deliveryParsedNotes as any).events || []);
+      currentEvents = Array.isArray(deliveryParsedNotes)
+        ? deliveryParsedNotes
+        : (((deliveryParsedNotes as Record<string, unknown>).events as unknown[]) || []);
     } catch { /* ignore */ }
 
     const updatedNotes = {
@@ -396,11 +394,9 @@ test.describe('E2E Shipping and Logistics Lifecycle Suite', () => {
     console.log('--- Phase 4: Approve Return & Replenish Stock ---');
     // Log out customer
     await page.goto('/account');
-    if (await signOutBtn.isVisible()) {
-      await signOutBtn.click();
-      await page.waitForURL('**/login');
-      await page.waitForTimeout(1000);
-    }
+    await page.click('button:has-text("Sign Out")');
+    await page.waitForURL('**/login');
+    await page.waitForTimeout(1000);
 
     // Log back in as Admin
     await expect(page.locator('input[type="email"]').first()).toBeVisible({ timeout: 10000 });
