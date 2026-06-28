@@ -78,7 +78,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         {
           event: '*',
           schema: 'public',
-          table: 'cart_items'
+          table: 'cart_items',
+          filter: `user_id=eq.${user.id}`
         },
         async () => {
           // Pull latest cart from DB to sync Zustand state

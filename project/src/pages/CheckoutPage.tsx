@@ -321,20 +321,26 @@ export default function CheckoutPage() {
         p_idempotency_key: idempotencyKey,
       });
 
-      // Pass the idempotency key in the headers of the REST request
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (rpcCall as any).headers.set('idempotency-key', idempotencyKey);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (rpcCall as any).headers.set('x-idempotency-key', idempotencyKey);
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new TypeError('Failed to fetch')), 15000)
-      );
 
-      const { data: orderId, error: checkoutError } = await Promise.race([
-        rpcCall,
-        timeoutPromise
-      ]);
+      let timeoutId: any;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new TypeError('Failed to fetch')), 15000);
+      });
+
+      let orderId: string | null = null;
+      let checkoutError: any = null;
+
+      try {
+        const result = await Promise.race([
+          rpcCall,
+          timeoutPromise
+        ]);
+        orderId = result.data;
+        checkoutError = result.error;
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (checkoutError) throw checkoutError;
       if (!orderId) throw new Error('Failed to place order');

@@ -308,10 +308,10 @@ BEGIN
     END IF;
   END IF;
 
-  -- 12. Clear user cart items atomically
+  -- 12. Clear user cart items atomically for the current tenant only
   DELETE FROM public.cart_items
   WHERE cart_id IN (
-    SELECT id FROM public.carts WHERE user_id = v_user_id
+    SELECT id FROM public.carts WHERE user_id = v_user_id AND tenant_id = v_tenant_id
   );
 
   RETURN v_order_id;

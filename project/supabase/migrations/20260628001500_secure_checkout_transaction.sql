@@ -12,7 +12,8 @@ CREATE OR REPLACE FUNCTION public.place_order(
   p_payment_status text,
   p_items jsonb,
   p_redeemed_points integer DEFAULT 0,
-  p_coupon_code text DEFAULT NULL
+  p_coupon_code text DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL
 )
 RETURNS uuid
 LANGUAGE plpgsql
@@ -255,10 +256,10 @@ BEGIN
     );
   END IF;
 
-  -- 10. Clear user cart items atomically
+  -- 10. Clear user cart items atomically for the current tenant only
   DELETE FROM public.cart_items
   WHERE cart_id IN (
-    SELECT id FROM public.carts WHERE user_id = v_user_id
+    SELECT id FROM public.carts WHERE user_id = v_user_id AND tenant_id = v_tenant_id
   );
 
   RETURN v_order_id;
