@@ -345,19 +345,14 @@ export default function CheckoutPage() {
       if (checkoutError) throw checkoutError;
       if (!orderId) throw new Error('Failed to place order');
 
-      // For online payments (prepaid), trigger simulated Stripe webhook immediately
-      if (paymentMethod !== 'cod') {
-        try {
-          await supabase.functions.invoke('payment-webhook', {
-            body: { order_number: orderNumber },
-            headers: {
-              'x-mock-payment': 'true',
-            }
-          });
-        } catch (err) {
-          console.error('Background simulated webhook execution failed:', err);
-        }
-      }
+      // SECURITY: We no longer auto-invoke the payment webhook from the
+      // client. The previous flow allowed any caller with the anon key
+      // to mark any order as PAID by POSTing { order_number, x-mock-payment }.
+      //
+      // The new flow expects either:
+      //   1. A genuine Stripe webhook (production)
+      //   2. An admin invoking simulate_payment_success RPC (dev/test)
+      // The order is left in PENDING_PAYMENT until one of those fires.
 
       // Refresh loyalty points balance on profile state
       await refreshProfile();

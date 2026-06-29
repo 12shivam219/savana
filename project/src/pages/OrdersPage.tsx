@@ -142,11 +142,14 @@ export default function OrdersPage() {
   const handleSimulateWebhook = async (orderNumber: string) => {
     try {
       setSimulatingWebhookId(orderNumber);
-      const { error } = await supabase.functions.invoke('payment-webhook', {
-        body: { order_number: orderNumber },
-        headers: {
-          'x-mock-payment': 'true',
-        }
+
+      // SECURITY: previously this invoked the payment-webhook function
+      // with x-mock-payment:true which let ANY user mark ANY order PAID.
+      // It now goes through the admin-only RPC which requires
+      // app_metadata.role = 'admin' in the JWT.
+      const { error } = await supabase.rpc('simulate_payment_success', {
+        p_order_number: orderNumber,
+        p_payment_intent_id: `pi_test_${Date.now()}`,
       });
 
       if (error) {
@@ -165,7 +168,7 @@ export default function OrdersPage() {
       addToast({
         type: 'error',
         title: 'Simulation Failed',
-        message: 'Could not deliver the payment success webhook.',
+        message: 'Could not deliver the payment success webhook. Admin role required.',
       });
     } finally {
       setSimulatingWebhookId(null);

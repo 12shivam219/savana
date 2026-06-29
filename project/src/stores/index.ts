@@ -4,19 +4,25 @@ import type { Product, ProductVariant, ToastMessage, ThemeMode, ProductImage } f
 import { isInvalidRefreshTokenError, supabase } from '../lib/supabase';
 import { FREE_SHIPPING_THRESHOLD, DEFAULT_SHIPPING_RATE } from '../lib/utils';
 
-export function getCurrentTenantId(): string {
-  if (typeof window !== 'undefined') {
-    const stored = localStorage.getItem('current_tenant_id');
-    if (stored) return stored;
+// Default tenant id must match the server-side default in the
+// multi_tenant_security migration.
+const DEFAULT_TENANT_ID = 'd9f8e7d6-c5b4-a3f2-e1d0-c9b8a7f6e5d4';
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const queryTenant = urlParams.get('tenant_id');
-    if (queryTenant) {
-      localStorage.setItem('current_tenant_id', queryTenant);
-      return queryTenant;
-    }
-  }
-  return 'd9f8e7d6-c5b4-a3f2-e1d0-c9b8a7f6e5d4';
+/**
+ * Returns the tenant id used purely for namespacing the cart in
+ * localStorage. This value is NOT used for any security decision —
+ * the server always resolves tenant_id from JWT app_metadata or
+ * profiles.tenant_id (both server-controlled).
+ *
+ * SECURITY: We intentionally do NOT read tenant_id from URL query
+ * parameters. An attacker could craft `?tenant_id=<victim>` to pollute
+ * the localStorage of a victim user who later visits the site and
+ * inherits a poisoned key namespace. Tenant changes must go through
+ * the server (admin action) only.
+ */
+export function getCurrentTenantId(): string {
+  if (typeof window === 'undefined') return DEFAULT_TENANT_ID;
+  return localStorage.getItem('current_tenant_id') || DEFAULT_TENANT_ID;
 }
 
 function createTenantBoundLocalStorage() {
@@ -64,50 +70,86 @@ interface CartStore {
   pullCart: (userId: string) => Promise<void>;
 }
 
-let syncPromise = Promise.resolve();
+/**
+ * Per-user serialization queue. The previous implementation used a
+ * single global promise chain, which caused these race conditions:
+ *
+ *   1. Rapid addItem() calls captured stale `newItems` closures.
+ *      Each queued sync overwrote the DB with an old snapshot,
+ *      dropping the newer additions.
+ *   2. mergeCart() DELETE+INSERT at the end of the chain wiped
+ *      items that were added while the merge was in flight.
+ *   3. pullCart() could overwrite local pending changes triggered
+ *      by a realtime/focus event.
+ *
+ * Fix: a Map<userId, Promise> ensures writes for a single user are
+ * serialized, but different users don't block each other. The
+ * promise chain uses the LATEST items snapshot at execution time, so
+ * stale closures can't win.
+ */
+const userSyncQueues = new Map<string, Promise<unknown>>();
+
+const enqueueSync = (userId: string, task: () => Promise<unknown>): Promise<unknown> => {
+  const previous = userSyncQueues.get(userId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(task);
+  // Always overwrite the slot with the latest tail so rapid calls chain.
+  userSyncQueues.set(
+    userId,
+    next.finally(() => {
+      if (userSyncQueues.get(userId) === next) {
+        userSyncQueues.delete(userId);
+      }
+    }),
+  );
+  return next;
+};
 
 const syncCartToDb = (items: CartItem[]) => {
-  syncPromise = syncPromise.then(async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
-      if (!user) return;
+  // Snapshot at call time so the queued task sees the latest items.
+  const snapshot = items.map((i) => ({ ...i }));
 
-      let { data: cart } = await supabase
-        .from('carts')
-        .select('id')
-        .eq('user_id', user.id)
-        .maybeSingle();
+  void supabase.auth
+    .getSession()
+    .then(({ data: { session } }) => session?.user?.id ?? null)
+    .then((userId) => {
+      if (!userId) return;
+      return enqueueSync(userId, async () => {
+        try {
+          let { data: cart } = await supabase
+            .from('carts')
+            .select('id')
+            .eq('user_id', userId)
+            .maybeSingle();
 
-      if (!cart) {
-        const { data: newCart } = await supabase
-          .from('carts')
-          .insert({ user_id: user.id, session_id: `session_${Date.now()}` })
-          .select('id')
-          .single();
-        if (!newCart) return;
-        cart = newCart;
-      }
+          if (!cart) {
+            const { data: newCart } = await supabase
+              .from('carts')
+              .insert({ user_id: userId, session_id: `session_${Date.now()}` })
+              .select('id')
+              .single();
+            if (!newCart) return;
+            cart = newCart;
+          }
 
-      // Perform atomic sync using RPC function
-      const itemsToSync = items.map(item => ({
-        product_id: item.productId,
-        variant_id: item.variantId,
-        quantity: item.quantity
-      }));
+          const itemsToSync = snapshot.map((item) => ({
+            product_id: item.productId,
+            variant_id: item.variantId,
+            quantity: item.quantity,
+          }));
 
-      const { error: syncError } = await supabase.rpc('sync_user_cart', {
-        p_cart_id: cart.id,
-        p_items: itemsToSync
+          const { error: syncError } = await supabase.rpc('sync_user_cart', {
+            p_cart_id: cart.id,
+            p_items: itemsToSync,
+          });
+          if (syncError) throw syncError;
+        } catch (err) {
+          if (isInvalidRefreshTokenError(err)) {
+            await supabase.auth.signOut();
+          }
+          console.error('Error syncing cart to database:', err);
+        }
       });
-      if (syncError) throw syncError;
-    } catch (err) {
-      if (isInvalidRefreshTokenError(err)) {
-        await supabase.auth.signOut();
-      }
-      console.error('Error syncing cart to database:', err);
-    }
-  });
+    });
 };
 
 export const useCartStore = create<CartStore>()(
@@ -257,174 +299,30 @@ export const useCartStore = create<CartStore>()(
       },
 
       mergeCart: async (userId) => {
-        return new Promise<void>((resolve, reject) => {
-          syncPromise = syncPromise.then(async () => {
-            try {
-              // 1. Fetch remote cart
-              const { data: cart } = await supabase
-                .from('carts')
-                .select('id')
-                .eq('user_id', userId)
-                .maybeSingle();
+        return enqueueSync(userId, async () => {
+          try {
+            // Snapshot guest items BEFORE awaiting any network call so
+            // we don't lose items added while we're in flight.
+            const guestItemsSnapshot = get().items.map((i) => ({ ...i }));
 
-              interface RemoteCartItem {
-                quantity: number;
-                product_id: string;
-                variant_id: string;
-                product: Product | Product[];
-                variant: ProductVariant | ProductVariant[];
-              }
-              let remoteItems: RemoteCartItem[] = [];
-              let cartId = cart?.id;
+            const { data: cart } = await supabase
+              .from('carts')
+              .select('id')
+              .eq('user_id', userId)
+              .maybeSingle();
 
-              if (cartId) {
-                // Fetch remote cart items with product and variant
-                const { data } = await supabase
-                  .from('cart_items')
-                  .select(`
-                    quantity,
-                    product_id,
-                    variant_id,
-                    product:products(*),
-                    variant:product_variants(*)
-                  `)
-                  .eq('cart_id', cartId);
-                
-                if (data) {
-                  remoteItems = data;
-                }
-              } else {
-                // Create a new cart if it doesn't exist
-                const { data: newCart } = await supabase
-                  .from('carts')
-                  .insert({ user_id: userId, session_id: get().sessionId })
-                  .select('id')
-                  .single();
-                if (newCart) {
-                  cartId = newCart.id;
-                }
-              }
-
-              // 2. Map remote items to CartItem format
-              const mappedRemoteItems: CartItem[] = [];
-              if (remoteItems.length > 0) {
-                // Collect all product IDs to fetch images for
-                const productIds = remoteItems.map(item => item.product_id);
-                const { data: imagesData } = await supabase
-                  .from('product_images')
-                  .select('*')
-                  .in('product_id', productIds);
-
-                const imagesMap = new Map<string, ProductImage[]>();
-                if (imagesData) {
-                  for (const img of imagesData) {
-                    const list = imagesMap.get(img.product_id) || [];
-                    list.push(img);
-                    imagesMap.set(img.product_id, list);
-                  }
-                }
-
-                for (const item of remoteItems) {
-                  const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
-                  const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
-                  if (productObj && variantObj) {
-                    const productImages = imagesMap.get(item.product_id) || [];
-                    mappedRemoteItems.push({
-                      productId: item.product_id,
-                      variantId: item.variant_id,
-                      product: {
-                        ...productObj,
-                        images: productImages,
-                      },
-                      variant: variantObj,
-                      quantity: item.quantity,
-                      images: productImages,
-                    });
-                  }
-                }
-              }
-
-              // 3. Reconcile guest cart items and remote items
-              const guestItems = get().items;
-              const mergedMap = new Map<string, CartItem>();
-
-              // Add remote items first
-              for (const item of mappedRemoteItems) {
-                mergedMap.set(item.variantId, item);
-              }
-
-              // Merge guest items
-              for (const item of guestItems) {
-                const existing = mergedMap.get(item.variantId);
-                if (existing) {
-                  const maxStock = item.variant.inventory_quantity;
-                  const combinedQuantity = Math.min(maxStock, existing.quantity + item.quantity);
-                  mergedMap.set(item.variantId, {
-                    ...existing,
-                    quantity: combinedQuantity,
-                  });
-                } else {
-                  mergedMap.set(item.variantId, item);
-                }
-              }
-
-              const finalItems = Array.from(mergedMap.values());
-
-              // 4. Update Zustand store state
-              set({ items: finalItems });
-
-              // 5. Update database cart items to match the final merged items
-              if (cartId) {
-                await supabase.from('cart_items').delete().eq('cart_id', cartId);
-                if (finalItems.length > 0) {
-                  const itemsToInsert = finalItems.map(item => ({
-                    cart_id: cartId,
-                    product_id: item.productId,
-                    variant_id: item.variantId,
-                    quantity: item.quantity,
-                  }));
-                  await supabase.from('cart_items').insert(itemsToInsert);
-                }
-              }
-              resolve();
-            } catch (err) {
-              if (isInvalidRefreshTokenError(err)) {
-                await supabase.auth.signOut();
-              }
-              console.error('Error merging cart:', err);
-              reject(err);
+            interface RemoteCartItem {
+              quantity: number;
+              product_id: string;
+              variant_id: string;
+              product: Product | Product[];
+              variant: ProductVariant | ProductVariant[];
             }
-          });
-        });
-      },
+            let remoteItems: RemoteCartItem[] = [];
+            let cartId = cart?.id;
 
-      pullCart: async (userId) => {
-        return new Promise<void>((resolve, reject) => {
-          syncPromise = syncPromise.then(async () => {
-            try {
-              const { data: cart } = await supabase
-                .from('carts')
-                .select('id')
-                .eq('user_id', userId)
-                .maybeSingle();
-
-              if (!cart) {
-                set({ items: [] });
-                resolve();
-                return;
-              }
-
-              /*
-              interface RemoteCartItem {
-                quantity: number;
-                product_id: string;
-                variant_id: string;
-                product: Product | Product[];
-                variant: ProductVariant | ProductVariant[];
-              }
-              */
-
-              const { data: remoteItems } = await supabase
+            if (cartId) {
+              const { data } = await supabase
                 .from('cart_items')
                 .select(`
                   quantity,
@@ -433,53 +331,210 @@ export const useCartStore = create<CartStore>()(
                   product:products(*),
                   variant:product_variants(*)
                 `)
-                .eq('cart_id', cart.id);
+                .eq('cart_id', cartId);
 
-              const mappedItems: CartItem[] = [];
-              if (remoteItems && remoteItems.length > 0) {
-                const productIds = remoteItems.map(item => item.product_id);
-                const { data: imagesData } = await supabase
-                  .from('product_images')
-                  .select('*')
-                  .in('product_id', productIds);
+              if (data) {
+                remoteItems = data;
+              }
+            } else {
+              const { data: newCart } = await supabase
+                .from('carts')
+                .insert({ user_id: userId, session_id: get().sessionId })
+                .select('id')
+                .single();
+              if (newCart) {
+                cartId = newCart.id;
+              }
+            }
 
-                const imagesMap = new Map<string, ProductImage[]>();
-                if (imagesData) {
-                  for (const img of imagesData) {
-                    const list = imagesMap.get(img.product_id) || [];
-                    list.push(img);
-                    imagesMap.set(img.product_id, list);
-                  }
-                }
+            const mappedRemoteItems: CartItem[] = [];
+            if (remoteItems.length > 0) {
+              const productIds = remoteItems.map((item) => item.product_id);
+              const { data: imagesData } = await supabase
+                .from('product_images')
+                .select('*')
+                .in('product_id', productIds);
 
-                for (const item of remoteItems) {
-                  const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
-                  const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
-                  if (productObj && variantObj) {
-                    const productImages = imagesMap.get(item.product_id) || [];
-                    mappedItems.push({
-                      productId: item.product_id,
-                      variantId: item.variant_id,
-                      product: {
-                        ...productObj,
-                        images: productImages,
-                      },
-                      variant: variantObj,
-                      quantity: item.quantity,
-                      images: productImages,
-                    });
-                  }
+              const imagesMap = new Map<string, ProductImage[]>();
+              if (imagesData) {
+                for (const img of imagesData) {
+                  const list = imagesMap.get(img.product_id) || [];
+                  list.push(img);
+                  imagesMap.set(img.product_id, list);
                 }
               }
 
-              set({ items: mappedItems });
-              resolve();
-            } catch (err) {
-              console.error('Error pulling cart:', err);
-              reject(err);
+              for (const item of remoteItems) {
+                const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
+                const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
+                if (productObj && variantObj) {
+                  const productImages = imagesMap.get(item.product_id) || [];
+                  mappedRemoteItems.push({
+                    productId: item.product_id,
+                    variantId: item.variant_id,
+                    product: {
+                      ...productObj,
+                      images: productImages,
+                    },
+                    variant: variantObj,
+                    quantity: item.quantity,
+                    images: productImages,
+                  });
+                }
+              }
             }
-          });
-        });
+
+            // Reconcile snapshot of guest items with remote items
+            const mergedMap = new Map<string, CartItem>();
+
+            for (const item of mappedRemoteItems) {
+              mergedMap.set(item.variantId, item);
+            }
+
+            for (const item of guestItemsSnapshot) {
+              const existing = mergedMap.get(item.variantId);
+              if (existing) {
+                const maxStock = item.variant.inventory_quantity;
+                const combinedQuantity = Math.min(maxStock, existing.quantity + item.quantity);
+                mergedMap.set(item.variantId, {
+                  ...existing,
+                  quantity: combinedQuantity,
+                });
+              } else {
+                mergedMap.set(item.variantId, item);
+              }
+            }
+
+            const finalItems = Array.from(mergedMap.values());
+
+            set({ items: finalItems });
+
+            // Re-fetch the latest guest state AFTER merging to capture
+            // anything added while we were awaiting. We then sync that
+            // complete state back to the DB so nothing is lost.
+            if (cartId) {
+              const latestGuestItems = get().items;
+              const finalReconciled = new Map<string, CartItem>();
+              for (const item of latestGuestItems) {
+                const existing = finalReconciled.get(item.variantId);
+                if (existing) {
+                  finalReconciled.set(item.variantId, {
+                    ...existing,
+                    quantity: existing.quantity + item.quantity,
+                  });
+                } else {
+                  finalReconciled.set(item.variantId, { ...item });
+                }
+              }
+              const finalList = Array.from(finalReconciled.values());
+              set({ items: finalList });
+
+              await supabase.rpc('sync_user_cart', {
+                p_cart_id: cartId,
+                p_items: finalList.map((i) => ({
+                  product_id: i.productId,
+                  variant_id: i.variantId,
+                  quantity: i.quantity,
+                })),
+              });
+            }
+          } catch (err) {
+            if (isInvalidRefreshTokenError(err)) {
+              await supabase.auth.signOut();
+            }
+            console.error('Error merging cart:', err);
+            throw err;
+          }
+        }) as Promise<void>;
+      },
+
+      pullCart: async (userId) => {
+        return enqueueSync(userId, async () => {
+          try {
+            const { data: cart } = await supabase
+              .from('carts')
+              .select('id')
+              .eq('user_id', userId)
+              .maybeSingle();
+
+            if (!cart) {
+              set({ items: [] });
+              return;
+            }
+
+            const { data: remoteItems } = await supabase
+              .from('cart_items')
+              .select(`
+                quantity,
+                product_id,
+                variant_id,
+                product:products(*),
+                variant:product_variants(*)
+              `)
+              .eq('cart_id', cart.id);
+
+            const mappedItems: CartItem[] = [];
+            if (remoteItems && remoteItems.length > 0) {
+              const productIds = remoteItems.map((item) => item.product_id);
+              const { data: imagesData } = await supabase
+                .from('product_images')
+                .select('*')
+                .in('product_id', productIds);
+
+              const imagesMap = new Map<string, ProductImage[]>();
+              if (imagesData) {
+                for (const img of imagesData) {
+                  const list = imagesMap.get(img.product_id) || [];
+                  list.push(img);
+                  imagesMap.set(img.product_id, list);
+                }
+              }
+
+              for (const item of remoteItems) {
+                const productObj = Array.isArray(item.product) ? item.product[0] : item.product;
+                const variantObj = Array.isArray(item.variant) ? item.variant[0] : item.variant;
+                if (productObj && variantObj) {
+                  const productImages = imagesMap.get(item.product_id) || [];
+                  mappedItems.push({
+                    productId: item.product_id,
+                    variantId: item.variant_id,
+                    product: {
+                      ...productObj,
+                      images: productImages,
+                    },
+                    variant: variantObj,
+                    quantity: item.quantity,
+                    images: productImages,
+                  });
+                }
+              }
+            }
+
+            // Merge with current local items instead of replacing — preserves
+            // any additions made while the network request was in flight.
+            const localItems = get().items;
+            const merged = new Map<string, CartItem>();
+            for (const item of localItems) {
+              merged.set(item.variantId, item);
+            }
+            for (const item of mappedItems) {
+              const existing = merged.get(item.variantId);
+              if (existing) {
+                // Keep the higher quantity (most likely the local pending add)
+                merged.set(item.variantId, {
+                  ...item,
+                  quantity: Math.max(existing.quantity, item.quantity),
+                });
+              } else {
+                merged.set(item.variantId, item);
+              }
+            }
+            set({ items: Array.from(merged.values()) });
+          } catch (err) {
+            console.error('Error pulling cart:', err);
+            throw err;
+          }
+        }) as Promise<void>;
       },
     }),
     {

@@ -3,6 +3,26 @@ import { isInvalidRefreshTokenError, supabase } from '../lib/supabase';
 import type { User } from '../types';
 import { useCartStore } from '../stores';
 
+/**
+ * Trailing-edge debounce: returns a function that delays invoking `fn`
+ * until `delay` ms have elapsed since the last call. Used to coalesce
+ * bursts of realtime/focus events that would otherwise trigger
+ * overlapping pullCart calls.
+ */
+function debounceTrailing<T extends (...args: unknown[]) => unknown>(
+  fn: T,
+  delay: number,
+): (...args: Parameters<T>) => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return (...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, delay);
+  };
+}
+
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
@@ -70,7 +90,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) return;
 
-    // Set up real-time channel subscription for cart_items
+    // The denormalize_cart_items migration added user_id to cart_items,
+    // so we can filter the realtime stream by user_id. Even so, RLS is
+    // the authoritative gate — the realtime filter is best-effort.
     const channel = supabase
       .channel(`public:cart_items:user_${user.id}`)
       .on(
@@ -79,19 +101,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           event: '*',
           schema: 'public',
           table: 'cart_items',
-          filter: `user_id=eq.${user.id}`
+          filter: `user_id=eq.${user.id}`,
         },
-        async () => {
-          // Pull latest cart from DB to sync Zustand state
-          await useCartStore.getState().pullCart(user.id);
-        }
+        // Debounce: realtime events often arrive in bursts (e.g. one
+        // DELETE + one INSERT for an UPSERT). Without debouncing we
+        // race multiple pullCart calls and thrash the UI.
+        debounceTrailing(() => {
+          useCartStore.getState().pullCart(user.id);
+        }, 300),
       )
       .subscribe();
 
-    // Aggressively validate/pull cart cache when tab/window regains focus
-    const handleFocus = () => {
+    // Window focus pulls are a UX nicety but must NOT clobber pending
+    // local changes. pullCart now merges with current items, so this is
+    // safe; we still debounce to coalesce bursts of focus events.
+    const handleFocus = debounceTrailing(() => {
       useCartStore.getState().pullCart(user.id);
-    };
+    }, 500);
     window.addEventListener('focus', handleFocus);
 
     return () => {
